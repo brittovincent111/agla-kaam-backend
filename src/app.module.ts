@@ -14,13 +14,21 @@ import { ServicesModule } from './services/services.module';
 import { RemindersModule } from './reminders/reminders.module';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { InvoicingModule } from './invoicing/invoicing.module';
+import { QuotationsModule } from './quotations/quotations.module';
+import { BillingItemsModule } from './billing-items/billing-items.module';
 import { TeamMembersModule } from './team-members/team-members.module';
+import { DocumentTemplatesModule } from './document-templates/document-templates.module';
+import { AppFeedbackModule } from './app-feedback/app-feedback.module';
+import { LegalModule } from './legal/legal.module';
+import { validate } from './env.validation';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: process.env.NODE_ENV === 'production' ? '.env.production' : '.env',
+      envFilePath:
+        process.env.NODE_ENV === 'production' ? '.env.production' : '.env',
+      validate,
     }),
     MongooseModule.forRootAsync({
       inject: [ConfigService],
@@ -51,7 +59,12 @@ import { TeamMembersModule } from './team-members/team-members.module';
     RemindersModule,
     SubscriptionsModule,
     InvoicingModule,
+    QuotationsModule,
+    BillingItemsModule,
     TeamMembersModule,
+    DocumentTemplatesModule,
+    AppFeedbackModule,
+    LegalModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],

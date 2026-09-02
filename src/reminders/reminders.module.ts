@@ -5,6 +5,7 @@ import { RemindersController } from './reminders.controller';
 import { ServicesModule } from '../services/services.module';
 import { CustomersModule } from '../customers/customers.module';
 import { BusinessesModule } from '../businesses/businesses.module';
+import { ServicePresetsModule } from '../service-presets/service-presets.module';
 import {
   Business,
   BusinessSchema,
@@ -18,6 +19,7 @@ import {
     ServicesModule,
     CustomersModule,
     BusinessesModule,
+    ServicePresetsModule,
   ],
   controllers: [RemindersController],
   providers: [RemindersService],

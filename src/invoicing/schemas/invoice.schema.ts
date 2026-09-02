@@ -51,6 +51,12 @@ export class Invoice {
 
   @Prop({ trim: true, maxlength: 60 })
   paymentTerms?: string;
+
+  // Distinct from `notes` — longer-form legal/policy text (warranty,
+  // cancellation, late-payment terms). Defaults from
+  // Business.defaultInvoiceTerms when a new invoice is created.
+  @Prop({ trim: true, maxlength: 2000 })
+  termsAndConditions?: string;
 }
 
 export const InvoiceSchema = SchemaFactory.createForClass(Invoice);

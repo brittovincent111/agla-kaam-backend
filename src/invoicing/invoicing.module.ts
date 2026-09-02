@@ -23,6 +23,6 @@ import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
   ],
   controllers: [InvoicingController],
   providers: [InvoicingService, InvoicePdfService],
-  exports: [InvoicingService],
+  exports: [InvoicingService, InvoicePdfService],
 })
 export class InvoicingModule {}

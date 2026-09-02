@@ -8,6 +8,7 @@ import {
   Business,
   BusinessDocument,
 } from '../businesses/schemas/business.schema';
+import { DEFAULT_REMINDER_TEMPLATE, renderMessageTemplate } from '../common/utils/message-template';
 
 function startOfDay(date: Date): Date {
   const d = new Date(date);
@@ -55,14 +56,10 @@ export class RemindersService {
   }
 
   buildWhatsAppMessage(
-    businessName: string,
-    customerName: string,
-    serviceType: string,
+    vars: { customerName: string; businessName: string; serviceType: string; nextServiceDate: string },
+    template?: string,
   ): string {
-    return (
-      `Hi ${customerName}, this is a reminder from ${businessName} that your ${serviceType} ` +
-      `is due. Would you like to schedule a visit?`
-    );
+    return renderMessageTemplate(template?.trim() || DEFAULT_REMINDER_TEMPLATE, vars);
   }
 
   buildWhatsAppLink(phone: string, message: string): string {

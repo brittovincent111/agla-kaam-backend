@@ -29,4 +29,14 @@ export class UpdateBusinessDto {
   @IsString()
   @MaxLength(15)
   gstin?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  defaultInvoiceTerms?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  defaultQuotationTerms?: string;
 }

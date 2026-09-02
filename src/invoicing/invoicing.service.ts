@@ -10,7 +10,7 @@ import { CustomersService } from '../customers/customers.service';
 import { ServicesService } from '../services/services.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { calculateInvoiceTotals, computeDisplayStatus } from '../common/constants/invoice-options';
-import { tierHasInvoicing } from '../common/constants/subscription-options';
+import { FREE_TIER_INVOICE_LIMIT, tierHasInvoicing } from '../common/constants/subscription-options';
 
 const DEFAULT_PAYMENT_TERM_DAYS = 7;
 
@@ -74,9 +74,14 @@ export class InvoicingService {
   async create(businessId: string, dto: CreateInvoiceDto): Promise<InvoiceDocument> {
     const tier = await this.subscriptionsService.getActiveTier(businessId);
     if (!tierHasInvoicing(tier)) {
-      throw new ForbiddenException(
-        'Invoicing is not included in your current plan. Upgrade to the Invoicing or Combo plan to create invoices.',
-      );
+      const count = await this.invoiceModel
+        .countDocuments({ businessId, status: { $ne: 'cancelled' } })
+        .exec();
+      if (count >= FREE_TIER_INVOICE_LIMIT) {
+        throw new ForbiddenException(
+          `Free plan is limited to ${FREE_TIER_INVOICE_LIMIT} invoices. Upgrade to the Invoicing or Combo plan for unlimited invoices.`,
+        );
+      }
     }
 
     await this.customersService.findOne(businessId, dto.customerId);
@@ -103,6 +108,7 @@ export class InvoicingService {
       balanceDue: totals.total,
       notes: dto.notes,
       paymentTerms: dto.paymentTerms,
+      termsAndConditions: dto.termsAndConditions,
     });
   }
 
@@ -193,6 +199,7 @@ export class InvoicingService {
     if (dto.dueDate) invoice.dueDate = new Date(dto.dueDate);
     if (dto.notes !== undefined) invoice.notes = dto.notes;
     if (dto.paymentTerms !== undefined) invoice.paymentTerms = dto.paymentTerms;
+    if (dto.termsAndConditions !== undefined) invoice.termsAndConditions = dto.termsAndConditions;
 
     const totals = calculateInvoiceTotals(
       invoice.items.map((item) => ({ quantity: item.quantity, rate: item.rate, taxRate: item.taxRate })),

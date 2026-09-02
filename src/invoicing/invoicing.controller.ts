@@ -9,6 +9,12 @@ import { InvoicePdfService } from './invoice-pdf.service';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { UpdateInvoiceDto } from './dto/update-invoice.dto';
 import { RecordPaymentDto } from './dto/record-payment.dto';
+import { BusinessesService } from '../businesses/businesses.service';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service';
+import {
+  DEFAULT_DOCUMENT_TEMPLATE_ID,
+  isDocumentTemplateUnlocked,
+} from '../common/pdf/document-templates';
 
 // Invoicing is an owner-only concern — technicians log services, not money.
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -18,6 +24,8 @@ export class InvoicingController {
   constructor(
     private readonly invoicingService: InvoicingService,
     private readonly invoicePdfService: InvoicePdfService,
+    private readonly businessesService: BusinessesService,
+    private readonly subscriptionsService: SubscriptionsService,
   ) {}
 
   @Post()
@@ -89,8 +97,15 @@ export class InvoicingController {
     @Param('id') id: string,
     @Res() res: Response,
   ) {
-    const invoice = await this.invoicingService.findOneWithDisplayStatus(business.businessId, id);
-    const buffer = await this.invoicePdfService.generate(business.businessId, invoice as any);
+    const [invoice, biz, tier] = await Promise.all([
+      this.invoicingService.findOneWithDisplayStatus(business.businessId, id),
+      this.businessesService.findById(business.businessId),
+      this.subscriptionsService.getActiveTier(business.businessId),
+    ]);
+    const templateId = isDocumentTemplateUnlocked(biz.invoiceTemplateId, tier)
+      ? biz.invoiceTemplateId
+      : DEFAULT_DOCUMENT_TEMPLATE_ID;
+    const buffer = await this.invoicePdfService.generate(business.businessId, invoice as any, templateId);
     res.set({
       'Content-Type': 'application/pdf',
       'Content-Disposition': `attachment; filename="${invoice.invoiceNumber}.pdf"`,

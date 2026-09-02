@@ -36,6 +36,11 @@ export class CreateInvoiceDto {
   notes?: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  termsAndConditions?: string;
+
+  @IsOptional()
   @IsNumber()
   @Min(0)
   discount?: number;

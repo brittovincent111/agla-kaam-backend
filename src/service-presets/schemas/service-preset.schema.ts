@@ -10,6 +10,11 @@ export class ServicePreset {
 
   @Prop({ required: true, trim: true })
   name: string;
+
+  // Custom WhatsApp reminder wording for this service type. Falls back to
+  // DEFAULT_REMINDER_TEMPLATE when unset.
+  @Prop({ trim: true })
+  messageTemplate?: string;
 }
 
 export const ServicePresetSchema = SchemaFactory.createForClass(ServicePreset);

@@ -17,6 +17,11 @@ export class CreateCustomerDto {
   phone: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  address?: string;
+
+  @IsOptional()
   @IsIn(['contacts', 'manual'])
   source?: 'contacts' | 'manual';
 }

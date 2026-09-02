@@ -57,6 +57,7 @@ export class CustomersService {
       businessId,
       name: dto.name,
       phone: dto.phone,
+      address: dto.address,
       source: dto.source ?? 'manual',
     });
   }

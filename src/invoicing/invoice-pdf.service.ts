@@ -3,25 +3,11 @@ import PDFDocument = require('pdfkit');
 import { BusinessesService } from '../businesses/businesses.service';
 import { CustomersService } from '../customers/customers.service';
 import { Invoice } from './schemas/invoice.schema';
-
-// Mirrors mobile/src/theme.ts (light palette) so the PDF reads as the same
-// brand as the app rather than a generic black-and-white document.
-const COLORS = {
-  primary: '#0F6E56',
-  onPrimary: '#FFFFFF',
-  primaryTint: '#CDEDE1', // onPrimary at reduced opacity, for text on the header band
-  tintBg: '#E1F5EE',
-  tintText: '#0F6E56',
-  urgencyText: '#D85A30',
-  urgencyBg: '#FAECE7',
-  text: '#2C2C2A',
-  textSecondary: '#5F5E5A',
-  textMuted: '#888780',
-  border: '#E4E2DD',
-  dangerText: '#A32D2D',
-  dangerBg: '#FCEBEB',
-  stripe: '#FAFAF9',
-};
+import {
+  DocumentTemplateId,
+  DocumentTemplateTheme,
+  getDocumentTemplate,
+} from '../common/pdf/document-templates';
 
 const PAGE_WIDTH = 595.28; // A4
 const PAGE_HEIGHT = 841.89; // A4
@@ -49,17 +35,33 @@ function formatCurrency(amount: number): string {
 }
 
 function formatDate(date: Date): string {
-  return new Date(date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+  return new Date(date).toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
 }
 
-const STATUS_INFO: Record<string, { label: string; bg: string; text: string }> = {
-  draft: { label: 'DRAFT', bg: '#EFEEEB', text: COLORS.textSecondary },
-  unpaid: { label: 'UNPAID', bg: COLORS.urgencyBg, text: COLORS.urgencyText },
-  partially_paid: { label: 'PARTIALLY PAID', bg: COLORS.urgencyBg, text: COLORS.urgencyText },
-  paid: { label: 'PAID', bg: COLORS.tintBg, text: COLORS.tintText },
-  overdue: { label: 'OVERDUE', bg: COLORS.dangerBg, text: COLORS.dangerText },
-  cancelled: { label: 'CANCELLED', bg: '#EFEEEB', text: COLORS.textSecondary },
-};
+function statusInfo(
+  colors: DocumentTemplateTheme['colors'],
+): Record<string, { label: string; bg: string; text: string }> {
+  return {
+    draft: { label: 'DRAFT', bg: '#EFEEEB', text: colors.textSecondary },
+    unpaid: { label: 'UNPAID', bg: colors.urgencyBg, text: colors.urgencyText },
+    partially_paid: {
+      label: 'PARTIALLY PAID',
+      bg: colors.urgencyBg,
+      text: colors.urgencyText,
+    },
+    paid: { label: 'PAID', bg: colors.tintBg, text: colors.tintText },
+    overdue: { label: 'OVERDUE', bg: colors.dangerBg, text: colors.dangerText },
+    cancelled: {
+      label: 'CANCELLED',
+      bg: '#EFEEEB',
+      text: colors.textSecondary,
+    },
+  };
+}
 
 @Injectable()
 export class InvoicePdfService {
@@ -68,7 +70,11 @@ export class InvoicePdfService {
     private readonly customersService: CustomersService,
   ) {}
 
-  async generate(businessId: string, invoice: Invoice & { _id: unknown }): Promise<Buffer> {
+  async generate(
+    businessId: string,
+    invoice: Invoice & { _id: unknown },
+    templateId?: DocumentTemplateId,
+  ): Promise<Buffer> {
     // invoice.customerId may already be a populated Customer object (the
     // detail-view fetch populates it) — resolve to a plain id either way.
     const rawCustomerId = invoice.customerId as unknown;
@@ -78,11 +84,36 @@ export class InvoicePdfService {
         : String(rawCustomerId);
 
     const [business, customer] = await Promise.all([
-      this.businessesService.findById(businessId),
+      this.businessesService.findByIdWithBranding(businessId),
       this.customersService.findOne(businessId, customerId),
     ]);
 
-    const notesHeight = invoice.notes ? this.measureNotesHeight(invoice.notes) : 0;
+    return this.render(business, customer, invoice, templateId);
+  }
+
+  // Split out from generate() so preview rendering (fixed sample data, no
+  // customer lookup) can share the same drawing code.
+  render(
+    business: {
+      name: string;
+      address?: string;
+      phone?: string;
+      email?: string;
+      gstin?: string;
+      logo?: Buffer;
+      signature?: Buffer;
+    },
+    customer: { name: string; phone: string; address?: string },
+    invoice: Invoice,
+    templateId?: DocumentTemplateId,
+  ): Promise<Buffer> {
+    const theme = getDocumentTemplate(templateId);
+    const notesHeight = invoice.notes
+      ? this.measureTextHeight(invoice.notes)
+      : 0;
+    const termsHeight = invoice.termsAndConditions
+      ? this.measureTextHeight(invoice.termsAndConditions)
+      : 0;
 
     const doc = new PDFDocument({ size: 'A4', margin: 0 });
     const chunks: Buffer[] = [];
@@ -91,15 +122,28 @@ export class InvoicePdfService {
       doc.on('end', () => resolve(Buffer.concat(chunks)));
     });
 
-    this.drawHeader(doc, business);
-    let y = this.drawTitleRow(doc, invoice);
-    y = this.drawBillingInfo(doc, invoice, customer, y);
-    y = this.drawItemsTable(doc, invoice, y);
-    y = this.drawTotals(doc, invoice, business, y);
+    this.drawHeader(doc, business, theme);
+    let y = this.drawTitleRow(doc, invoice, theme);
+    y = this.drawBillingInfo(doc, invoice, customer, y, theme);
+    y = this.drawItemsTable(doc, invoice, y, theme);
+    y = this.drawTotals(doc, invoice, business, y, theme);
     if (invoice.notes) {
-      y = this.drawNotes(doc, invoice.notes, y, notesHeight);
+      y = this.drawTextBox(doc, 'NOTES', invoice.notes, y, notesHeight, theme);
     }
-    this.drawFooter(doc, business, y + FOOTER_TOP_GAP);
+    if (invoice.termsAndConditions) {
+      y = this.drawTextBox(
+        doc,
+        'TERMS & CONDITIONS',
+        invoice.termsAndConditions,
+        y,
+        termsHeight,
+        theme,
+      );
+    }
+    if (business.signature) {
+      y = this.drawSignatureBlock(doc, business.signature, y, theme);
+    }
+    this.drawFooter(doc, business, y + FOOTER_TOP_GAP, theme);
 
     doc.end();
     return done;
@@ -107,36 +151,86 @@ export class InvoicePdfService {
 
   // A throwaway document purely for font metrics — heightOfString needs a
   // PDFDocument instance but not one sized for the final page.
-  private measureNotesHeight(notes: string): number {
+  private measureTextHeight(text: string): number {
     const measureDoc = new PDFDocument();
     measureDoc.font('Helvetica').fontSize(10);
-    return measureDoc.heightOfString(notes, { width: CONTENT_WIDTH - 28 });
+    return measureDoc.heightOfString(text, { width: CONTENT_WIDTH - 28 });
   }
 
-  private drawHeader(doc: PDFKit.PDFDocument, business: { name: string; address?: string; phone: string; email?: string; gstin?: string }) {
-    doc.rect(0, 0, PAGE_WIDTH, HEADER_HEIGHT).fill(COLORS.primary);
-
-    // Monogram badge — stands in for a logo until logo upload exists.
+  private drawHeader(
+    doc: PDFKit.PDFDocument,
+    business: {
+      name: string;
+      address?: string;
+      phone?: string;
+      email?: string;
+      gstin?: string;
+      logo?: Buffer;
+    },
+    theme: DocumentTemplateTheme,
+  ) {
+    const { colors } = theme;
     const badgeCx = M + 22;
     const badgeCy = 44;
-    doc.circle(badgeCx, badgeCy, 22).fill(COLORS.onPrimary);
-    const initial = (business.name?.trim()?.[0] ?? '?').toUpperCase();
-    doc
-      .fillColor(COLORS.primary)
-      .font('Helvetica-Bold')
-      .fontSize(20)
-      .text(initial, badgeCx - 22, badgeCy - 10, { width: 44, align: 'center' });
-
     const textX = M + 60;
-    doc.fillColor(COLORS.onPrimary).font('Helvetica-Bold').fontSize(17).text(business.name, textX, 24, { width: 320 });
+    const isLine = theme.headerStyle === 'line';
 
-    doc.font('Helvetica').fontSize(9).fillColor(COLORS.primaryTint);
+    const drawBadge = () => {
+      if (business.logo) {
+        doc.save();
+        doc.circle(badgeCx, badgeCy, 22).clip();
+        doc.image(business.logo, badgeCx - 22, badgeCy - 22, {
+          fit: [44, 44],
+          align: 'center',
+          valign: 'center',
+        });
+        doc.restore();
+        return;
+      }
+      const initial = (business.name?.trim()?.[0] ?? '?').toUpperCase();
+      doc
+        .fillColor(colors.primary)
+        .font('Helvetica-Bold')
+        .fontSize(20)
+        .text(initial, badgeCx - 22, badgeCy - 10, {
+          width: 44,
+          align: 'center',
+        });
+    };
+
+    if (isLine) {
+      doc
+        .circle(badgeCx, badgeCy, 22)
+        .lineWidth(1.5)
+        .strokeColor(colors.primary)
+        .stroke();
+      drawBadge();
+      doc
+        .fillColor(colors.text)
+        .font('Helvetica-Bold')
+        .fontSize(17)
+        .text(business.name, textX, 24, { width: 320 });
+      doc.font('Helvetica').fontSize(9).fillColor(colors.textSecondary);
+    } else {
+      doc.rect(0, 0, PAGE_WIDTH, HEADER_HEIGHT).fill(colors.primary);
+      doc.circle(badgeCx, badgeCy, 22).fill(colors.onPrimary);
+      drawBadge();
+      doc
+        .fillColor(colors.onPrimary)
+        .font('Helvetica-Bold')
+        .fontSize(17)
+        .text(business.name, textX, 24, { width: 320 });
+      doc.font('Helvetica').fontSize(9).fillColor(colors.primaryTint);
+    }
+
     let contactY = 46;
     if (business.address) {
       doc.text(business.address, textX, contactY, { width: 320 });
       contactY += 13;
     }
-    const contactLine = [business.phone, business.email].filter(Boolean).join('   ·   ');
+    const contactLine = [business.phone, business.email]
+      .filter(Boolean)
+      .join('   ·   ');
     if (contactLine) {
       doc.text(contactLine, textX, contactY, { width: 320 });
     }
@@ -145,17 +239,43 @@ export class InvoicePdfService {
       doc
         .font('Helvetica')
         .fontSize(9)
-        .fillColor(COLORS.primaryTint)
-        .text(`GSTIN: ${business.gstin}`, PAGE_WIDTH - M - 200, 24, { width: 200, align: 'right' });
+        .fillColor(isLine ? colors.textSecondary : colors.primaryTint)
+        .text(`GSTIN: ${business.gstin}`, PAGE_WIDTH - M - 200, 24, {
+          width: 200,
+          align: 'right',
+        });
+    }
+
+    if (isLine) {
+      doc
+        .moveTo(0, HEADER_HEIGHT)
+        .lineTo(PAGE_WIDTH, HEADER_HEIGHT)
+        .strokeColor(colors.primary)
+        .lineWidth(2)
+        .stroke();
     }
   }
 
-  private drawTitleRow(doc: PDFKit.PDFDocument, invoice: Invoice): number {
+  private drawTitleRow(
+    doc: PDFKit.PDFDocument,
+    invoice: Invoice,
+    theme: DocumentTemplateTheme,
+  ): number {
+    const { colors } = theme;
     const top = TITLE_TOP;
-    doc.font('Helvetica').fontSize(10).fillColor(COLORS.textMuted).text('INVOICE', M, top, { characterSpacing: 1.5 });
-    doc.font('Helvetica-Bold').fontSize(24).fillColor(COLORS.text).text(invoice.invoiceNumber, M, top + 14);
+    doc
+      .font('Helvetica')
+      .fontSize(10)
+      .fillColor(colors.textMuted)
+      .text('INVOICE', M, top, { characterSpacing: 1.5 });
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(24)
+      .fillColor(colors.text)
+      .text(invoice.invoiceNumber, M, top + 14);
 
-    const status = STATUS_INFO[invoice.status] ?? STATUS_INFO.draft;
+    const status =
+      statusInfo(colors)[invoice.status] ?? statusInfo(colors).draft;
     doc.font('Helvetica-Bold').fontSize(9);
     const label = status.label;
     const textWidth = doc.widthOfString(label, { characterSpacing: 0.5 });
@@ -163,37 +283,75 @@ export class InvoicePdfService {
     const pillHeight = 22;
     const pillX = PAGE_WIDTH - M - pillWidth;
     const pillY = top + 8;
-    doc.roundedRect(pillX, pillY, pillWidth, pillHeight, pillHeight / 2).fill(status.bg);
+    doc
+      .roundedRect(pillX, pillY, pillWidth, pillHeight, pillHeight / 2)
+      .fill(status.bg);
     doc
       .fillColor(status.text)
-      .text(label, pillX, pillY + 6.5, { width: pillWidth, align: 'center', characterSpacing: 0.5 });
+      .text(label, pillX, pillY + 6.5, {
+        width: pillWidth,
+        align: 'center',
+        characterSpacing: 0.5,
+      });
 
     const dividerY = top + 56;
-    doc.moveTo(M, dividerY).lineTo(PAGE_WIDTH - M, dividerY).strokeColor(COLORS.border).lineWidth(1).stroke();
+    doc
+      .moveTo(M, dividerY)
+      .lineTo(PAGE_WIDTH - M, dividerY)
+      .strokeColor(colors.border)
+      .lineWidth(1)
+      .stroke();
     return dividerY + 22;
   }
 
   private drawBillingInfo(
     doc: PDFKit.PDFDocument,
     invoice: Invoice,
-    customer: { name: string; phone: string },
+    customer: { name: string; phone: string; address?: string },
     top: number,
+    theme: DocumentTemplateTheme,
   ): number {
+    const { colors } = theme;
     const rightX = M + 300;
     const labelWidth = 110;
     const valueWidth = PAGE_WIDTH - M - (rightX + labelWidth);
 
-    doc.font('Helvetica').fontSize(9).fillColor(COLORS.textMuted).text('BILLED TO', M, top, { characterSpacing: 1 });
-    doc.font('Helvetica-Bold').fontSize(13).fillColor(COLORS.text).text(customer.name, M, top + 14);
-    doc.font('Helvetica').fontSize(10).fillColor(COLORS.textSecondary).text(customer.phone, M, top + 32);
+    doc
+      .font('Helvetica')
+      .fontSize(9)
+      .fillColor(colors.textMuted)
+      .text('BILLED TO', M, top, { characterSpacing: 1 });
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(13)
+      .fillColor(colors.text)
+      .text(customer.name, M, top + 14);
+    doc
+      .font('Helvetica')
+      .fontSize(10)
+      .fillColor(colors.textSecondary)
+      .text(customer.phone, M, top + 32);
+    let addressHeight = 0;
+    if (customer.address) {
+      doc.font('Helvetica').fontSize(9).fillColor(colors.textSecondary);
+      addressHeight = doc.heightOfString(customer.address, { width: 260 });
+      doc.text(customer.address, M, top + 47, { width: 260 });
+    }
 
     const detailRow = (label: string, value: string, rowY: number) => {
-      doc.font('Helvetica').fontSize(9).fillColor(COLORS.textMuted).text(label, rightX, rowY, { width: labelWidth });
+      doc
+        .font('Helvetica')
+        .fontSize(9)
+        .fillColor(colors.textMuted)
+        .text(label, rightX, rowY, { width: labelWidth });
       doc
         .font('Helvetica-Bold')
         .fontSize(10)
-        .fillColor(COLORS.text)
-        .text(value, rightX + labelWidth, rowY, { width: valueWidth, align: 'right' });
+        .fillColor(colors.text)
+        .text(value, rightX + labelWidth, rowY, {
+          width: valueWidth,
+          align: 'right',
+        });
     };
     detailRow('Invoice date', formatDate(invoice.invoiceDate), top);
     detailRow('Due date', formatDate(invoice.dueDate), top + 16);
@@ -201,10 +359,21 @@ export class InvoicePdfService {
       detailRow('Payment terms', invoice.paymentTerms, top + 32);
     }
 
-    return top + BILLING_BLOCK_HEIGHT;
+    return top + Math.max(BILLING_BLOCK_HEIGHT, 47 + addressHeight + 12);
   }
 
-  private drawItemsTable(doc: PDFKit.PDFDocument, invoice: Invoice, top: number): number {
+  private drawItemsTable(
+    doc: PDFKit.PDFDocument,
+    invoice: Invoice,
+    top: number,
+    theme: DocumentTemplateTheme,
+  ): number {
+    const { colors } = theme;
+    const s = theme.fontScale;
+    const tableHeaderHeight = Math.round(TABLE_HEADER_HEIGHT * s);
+    const itemRowHeight = Math.round(ITEM_ROW_HEIGHT * s);
+    const itemRowHeightWithDesc = Math.round(ITEM_ROW_HEIGHT_WITH_DESC * s);
+
     const cols = {
       desc: { x: M, w: 235 },
       qty: { x: M + 235, w: 45 },
@@ -213,41 +382,78 @@ export class InvoicePdfService {
       amount: { x: M + 400, w: PAGE_WIDTH - M - (M + 400) },
     };
 
-    doc.rect(M, top, CONTENT_WIDTH, TABLE_HEADER_HEIGHT).fill(COLORS.tintBg);
-    doc.font('Helvetica-Bold').fontSize(9).fillColor(COLORS.tintText);
-    const headerY = top + 9;
+    doc.rect(M, top, CONTENT_WIDTH, tableHeaderHeight).fill(colors.tintBg);
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(9 * s)
+      .fillColor(colors.tintText);
+    const headerY = top + tableHeaderHeight / 2 - 4.5 * s;
     doc.text('DESCRIPTION', cols.desc.x + 10, headerY);
     doc.text('QTY', cols.qty.x, headerY, { width: cols.qty.w, align: 'right' });
-    doc.text('RATE', cols.rate.x, headerY, { width: cols.rate.w, align: 'right' });
+    doc.text('RATE', cols.rate.x, headerY, {
+      width: cols.rate.w,
+      align: 'right',
+    });
     doc.text('TAX', cols.tax.x, headerY, { width: cols.tax.w, align: 'right' });
-    doc.text('AMOUNT', cols.amount.x, headerY, { width: cols.amount.w - 10, align: 'right' });
+    doc.text('AMOUNT', cols.amount.x, headerY, {
+      width: cols.amount.w - 10,
+      align: 'right',
+    });
 
-    let rowY = top + TABLE_HEADER_HEIGHT;
+    let rowY = top + tableHeaderHeight;
     invoice.items.forEach((item, index) => {
-      const rowHeight = item.description ? ITEM_ROW_HEIGHT_WITH_DESC : ITEM_ROW_HEIGHT;
+      const rowHeight = item.description
+        ? itemRowHeightWithDesc
+        : itemRowHeight;
       if (index % 2 === 1) {
-        doc.rect(M, rowY, CONTENT_WIDTH, rowHeight).fill(COLORS.stripe);
+        doc.rect(M, rowY, CONTENT_WIDTH, rowHeight).fill(colors.stripe);
       }
-      const textY = rowY + 7;
-      doc.font('Helvetica-Bold').fontSize(10).fillColor(COLORS.text).text(item.name, cols.desc.x + 10, textY, { width: cols.desc.w - 10 });
-      doc.font('Helvetica').fontSize(10).fillColor(COLORS.text);
-      doc.text(String(item.quantity), cols.qty.x, textY, { width: cols.qty.w, align: 'right' });
-      doc.text(item.rate.toFixed(2), cols.rate.x, textY, { width: cols.rate.w, align: 'right' });
-      doc.text(`${item.taxRate}%`, cols.tax.x, textY, { width: cols.tax.w, align: 'right' });
+      const textY = rowY + 7 * s;
       doc
         .font('Helvetica-Bold')
-        .text((item.amount + item.taxAmount).toFixed(2), cols.amount.x, textY, { width: cols.amount.w - 10, align: 'right' });
+        .fontSize(10 * s)
+        .fillColor(colors.text)
+        .text(item.name, cols.desc.x + 10, textY, { width: cols.desc.w - 10 });
+      doc
+        .font('Helvetica')
+        .fontSize(10 * s)
+        .fillColor(colors.text);
+      doc.text(String(item.quantity), cols.qty.x, textY, {
+        width: cols.qty.w,
+        align: 'right',
+      });
+      doc.text(item.rate.toFixed(2), cols.rate.x, textY, {
+        width: cols.rate.w,
+        align: 'right',
+      });
+      doc.text(`${item.taxRate}%`, cols.tax.x, textY, {
+        width: cols.tax.w,
+        align: 'right',
+      });
+      doc
+        .font('Helvetica-Bold')
+        .text((item.amount + item.taxAmount).toFixed(2), cols.amount.x, textY, {
+          width: cols.amount.w - 10,
+          align: 'right',
+        });
       if (item.description) {
         doc
           .font('Helvetica')
-          .fontSize(8.5)
-          .fillColor(COLORS.textMuted)
-          .text(item.description, cols.desc.x + 10, textY + 14, { width: cols.desc.w - 10 });
+          .fontSize(8.5 * s)
+          .fillColor(colors.textMuted)
+          .text(item.description, cols.desc.x + 10, textY + 14 * s, {
+            width: cols.desc.w - 10,
+          });
       }
       rowY += rowHeight;
     });
 
-    doc.moveTo(M, rowY).lineTo(PAGE_WIDTH - M, rowY).strokeColor(COLORS.border).lineWidth(1).stroke();
+    doc
+      .moveTo(M, rowY)
+      .lineTo(PAGE_WIDTH - M, rowY)
+      .strokeColor(colors.border)
+      .lineWidth(1)
+      .stroke();
     return rowY + TABLE_BOTTOM_GAP;
   }
 
@@ -256,23 +462,38 @@ export class InvoicePdfService {
     invoice: Invoice,
     business: { gstin?: string },
     top: number,
+    theme: DocumentTemplateTheme,
   ): number {
+    const { colors } = theme;
     const boxWidth = 240;
     const boxX = PAGE_WIDTH - M - boxWidth;
     const labelX = boxX + 16;
     const valueWidth = boxWidth - 32;
     let rowY = top + TOTALS_TOP_GAP;
 
-    const row = (label: string, value: string, opts: { bold?: boolean; color?: string; size?: number } = {}) => {
+    const row = (
+      label: string,
+      value: string,
+      opts: { bold?: boolean; color?: string; size?: number } = {},
+    ) => {
       const size = opts.size ?? (opts.bold ? 12 : 10);
-      doc.font(opts.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(size).fillColor(opts.color ?? (opts.bold ? COLORS.text : COLORS.textSecondary));
+      doc
+        .font(opts.bold ? 'Helvetica-Bold' : 'Helvetica')
+        .fontSize(size)
+        .fillColor(
+          opts.color ?? (opts.bold ? colors.text : colors.textSecondary),
+        );
       doc.text(label, labelX, rowY, { width: valueWidth / 2 });
-      doc.text(value, labelX + valueWidth / 2, rowY, { width: valueWidth / 2, align: 'right' });
+      doc.text(value, labelX + valueWidth / 2, rowY, {
+        width: valueWidth / 2,
+        align: 'right',
+      });
       rowY += opts.bold ? TOTALS_ROW_HEIGHT_BOLD : TOTALS_ROW_HEIGHT;
     };
 
     row('Subtotal', formatCurrency(invoice.subtotal));
-    if (invoice.discount > 0) row('Discount', `- ${formatCurrency(invoice.discount)}`);
+    if (invoice.discount > 0)
+      row('Discount', `- ${formatCurrency(invoice.discount)}`);
     if (business.gstin) {
       row('CGST', formatCurrency(invoice.taxTotal / 2));
       row('SGST', formatCurrency(invoice.taxTotal / 2));
@@ -281,31 +502,106 @@ export class InvoicePdfService {
     }
 
     rowY += TOTALS_DIVIDER_GAP;
-    doc.moveTo(boxX, rowY - TOTALS_DIVIDER_GAP).lineTo(PAGE_WIDTH - M, rowY - TOTALS_DIVIDER_GAP).strokeColor(COLORS.border).lineWidth(1).stroke();
+    doc
+      .moveTo(boxX, rowY - TOTALS_DIVIDER_GAP)
+      .lineTo(PAGE_WIDTH - M, rowY - TOTALS_DIVIDER_GAP)
+      .strokeColor(colors.border)
+      .lineWidth(1)
+      .stroke();
 
-    row('Total', formatCurrency(invoice.total), { bold: true, color: COLORS.primary, size: 13 });
+    row('Total', formatCurrency(invoice.total), {
+      bold: true,
+      color: colors.primary,
+      size: 13,
+    });
     row('Amount paid', formatCurrency(invoice.amountPaid));
 
-    const balanceColor = invoice.balanceDue > 0 ? COLORS.dangerText : COLORS.tintText;
-    row('Balance due', formatCurrency(invoice.balanceDue), { bold: true, color: balanceColor });
+    const balanceColor =
+      invoice.balanceDue > 0 ? colors.dangerText : colors.tintText;
+    row('Balance due', formatCurrency(invoice.balanceDue), {
+      bold: true,
+      color: balanceColor,
+    });
 
     return rowY + TOTALS_BOTTOM_GAP;
   }
 
-  private drawNotes(doc: PDFKit.PDFDocument, notes: string, top: number, notesHeight: number): number {
-    const boxHeight = notesHeight + NOTES_BOX_PADDING;
-    doc.roundedRect(M, top, CONTENT_WIDTH, boxHeight, 6).fill(COLORS.stripe);
-    doc.font('Helvetica-Bold').fontSize(9).fillColor(COLORS.textMuted).text('NOTES', M + 14, top + 12, { characterSpacing: 1 });
-    doc.font('Helvetica').fontSize(10).fillColor(COLORS.textSecondary).text(notes, M + 14, top + 26, { width: CONTENT_WIDTH - 28 });
+  private drawTextBox(
+    doc: PDFKit.PDFDocument,
+    label: string,
+    text: string,
+    top: number,
+    textHeight: number,
+    theme: DocumentTemplateTheme,
+  ): number {
+    const { colors } = theme;
+    const boxHeight = textHeight + NOTES_BOX_PADDING;
+    doc.roundedRect(M, top, CONTENT_WIDTH, boxHeight, 6).fill(colors.stripe);
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(9)
+      .fillColor(colors.textMuted)
+      .text(label, M + 14, top + 12, { characterSpacing: 1 });
+    doc
+      .font('Helvetica')
+      .fontSize(10)
+      .fillColor(colors.textSecondary)
+      .text(text, M + 14, top + 26, { width: CONTENT_WIDTH - 28 });
     return top + boxHeight + NOTES_BOTTOM_GAP;
   }
 
-  private drawFooter(doc: PDFKit.PDFDocument, business: { name: string }, y: number) {
-    doc.moveTo(M, y).lineTo(PAGE_WIDTH - M, y).strokeColor(COLORS.border).lineWidth(1).stroke();
+  private drawSignatureBlock(
+    doc: PDFKit.PDFDocument,
+    signature: Buffer,
+    top: number,
+    theme: DocumentTemplateTheme,
+  ): number {
+    const { colors } = theme;
+    const boxWidth = 160;
+    const boxX = PAGE_WIDTH - M - boxWidth;
+    const imageHeight = 44;
+    doc.image(signature, boxX, top, {
+      fit: [boxWidth, imageHeight],
+      align: 'center',
+    });
+    const lineY = top + imageHeight + 6;
+    doc
+      .moveTo(boxX, lineY)
+      .lineTo(boxX + boxWidth, lineY)
+      .strokeColor(colors.border)
+      .lineWidth(1)
+      .stroke();
     doc
       .font('Helvetica')
       .fontSize(9)
-      .fillColor(COLORS.textMuted)
-      .text(`Thank you for your business — ${business.name}`, M, y + 12, { width: CONTENT_WIDTH, align: 'center' });
+      .fillColor(colors.textMuted)
+      .text('Authorized Signatory', boxX, lineY + 6, {
+        width: boxWidth,
+        align: 'center',
+      });
+    return lineY + 24;
+  }
+
+  private drawFooter(
+    doc: PDFKit.PDFDocument,
+    business: { name: string },
+    y: number,
+    theme: DocumentTemplateTheme,
+  ) {
+    const { colors } = theme;
+    doc
+      .moveTo(M, y)
+      .lineTo(PAGE_WIDTH - M, y)
+      .strokeColor(colors.border)
+      .lineWidth(1)
+      .stroke();
+    doc
+      .font('Helvetica')
+      .fontSize(9)
+      .fillColor(colors.textMuted)
+      .text(`Thank you for your business — ${business.name}`, M, y + 12, {
+        width: CONTENT_WIDTH,
+        align: 'center',
+      });
   }
 }

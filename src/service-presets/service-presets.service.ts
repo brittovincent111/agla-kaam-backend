@@ -46,7 +46,20 @@ export class ServicePresetsService {
     businessId: string,
     dto: CreateServicePresetDto,
   ): Promise<ServicePresetDocument> {
-    return this.presetModel.create({ businessId, name: dto.name });
+    return this.presetModel.create({
+      businessId,
+      name: dto.name,
+      messageTemplate: dto.messageTemplate,
+    });
+  }
+
+  // Case-insensitive — service.serviceType is free text typed while logging a
+  // service, so it won't always match a preset's stored casing exactly.
+  findByName(businessId: string, name: string): Promise<ServicePresetDocument | null> {
+    return this.presetModel
+      .findOne({ businessId, name })
+      .collation({ locale: 'en', strength: 2 })
+      .exec();
   }
 
   async findOneOwned(

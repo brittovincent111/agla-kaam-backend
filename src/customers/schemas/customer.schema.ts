@@ -15,6 +15,9 @@ export class Customer {
   @Prop({ required: true, trim: true })
   phone: string;
 
+  @Prop({ trim: true, maxlength: 200 })
+  address?: string;
+
   @Prop({ required: true, enum: ['contacts', 'manual'], default: 'manual' })
   source: 'contacts' | 'manual';
 

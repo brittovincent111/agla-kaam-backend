@@ -26,6 +26,7 @@ export class JwtAuthGuard implements CanActivate {
       request.business = {
         businessId: payload.sub,
         phone: payload.phone,
+        email: payload.email,
         role: payload.role ?? 'owner',
         teamMemberId: payload.teamMemberId,
       };

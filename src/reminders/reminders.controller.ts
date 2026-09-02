@@ -8,6 +8,11 @@ import { RemindersService } from './reminders.service';
 import { ServicesService } from '../services/services.service';
 import { CustomersService } from '../customers/customers.service';
 import { BusinessesService } from '../businesses/businesses.service';
+import { ServicePresetsService } from '../service-presets/service-presets.service';
+
+function formatDateEnIN(date: Date): string {
+  return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+}
 
 @UseGuards(JwtAuthGuard)
 @Controller('reminders')
@@ -17,6 +22,7 @@ export class RemindersController {
     private readonly servicesService: ServicesService,
     private readonly customersService: CustomersService,
     private readonly businessesService: BusinessesService,
+    private readonly servicePresetsService: ServicePresetsService,
   ) {}
 
   @Get('overdue')
@@ -62,11 +68,19 @@ export class RemindersController {
     const businessDoc = await this.businessesService.findById(
       business.businessId,
     );
+    const preset = await this.servicePresetsService.findByName(
+      business.businessId,
+      service.serviceType,
+    );
 
     const message = this.remindersService.buildWhatsAppMessage(
-      businessDoc.name,
-      customer.name,
-      service.serviceType,
+      {
+        customerName: customer.name,
+        businessName: businessDoc.name,
+        serviceType: service.serviceType,
+        nextServiceDate: formatDateEnIN(service.nextServiceDate),
+      },
+      preset?.messageTemplate,
     );
     return {
       url: this.remindersService.buildWhatsAppLink(customer.phone, message),
