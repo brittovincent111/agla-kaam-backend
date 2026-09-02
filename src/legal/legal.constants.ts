@@ -290,6 +290,7 @@ const PRIVACY_POLICY_BODY = `
     <nav class="doc-nav-links">
       <a href="#" aria-current="page">Privacy Policy</a>
       <a href="terms-of-service">Terms of Service</a>
+      <a href="delete-account">Delete My Data</a>
     </nav>
   </div>
 </div>
@@ -445,6 +446,7 @@ const TERMS_OF_SERVICE_BODY = `
     <nav class="doc-nav-links">
       <a href="privacy-policy">Privacy Policy</a>
       <a href="#" aria-current="page">Terms of Service</a>
+      <a href="delete-account">Delete My Data</a>
     </nav>
   </div>
 </div>
@@ -567,8 +569,105 @@ const TERMS_OF_SERVICE_BODY = `
 </footer>
 `;
 
+const DELETE_ACCOUNT_BODY = `
+<div class="masthead">
+  <div class="masthead-inner">
+    <p class="wordmark"><span class="mark"></span> Agla Kaam · by VeloCrew</p>
+    <h1 class="doc-title">Delete Your Account or Data</h1>
+    <div class="doc-meta">
+      <span>Effective <strong>2 September 2026</strong></span>
+      <span>Operated by <strong>VeloCrew</strong> (UDYAM&#8209;KL&#8209;13&#8209;0110771)</span>
+    </div>
+    <nav class="doc-nav-links">
+      <a href="privacy-policy">Privacy Policy</a>
+      <a href="terms-of-service">Terms of Service</a>
+      <a href="#" aria-current="page">Delete My Data</a>
+    </nav>
+  </div>
+</div>
+
+<div class="layout">
+  <nav class="toc" aria-label="Sections">
+    <p class="toc-label">On this page</p>
+    <ol>
+      <li><a href="#in-app">1. Delete in the app</a></li>
+      <li><a href="#by-email">2. Request by email</a></li>
+      <li><a href="#partial">3. Delete only some data</a></li>
+      <li><a href="#what-happens">4. What's deleted &amp; what's kept</a></li>
+      <li><a href="#contact">5. Contact</a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <div class="summary">
+      <p class="summary-label">In plain terms</p>
+      <ul>
+        <li><strong>Delete your account any time</strong> from the app's menu &mdash; no need to contact us.</li>
+        <li><strong>No app installed?</strong> Email us and we'll delete it for you.</li>
+        <li><strong>Deletion is immediate and permanent</strong> &mdash; not a holding period, not a soft delete.</li>
+        <li>You can also ask us to delete <strong>specific</strong> data &mdash; a customer, an invoice &mdash; without deleting your whole account.</li>
+      </ul>
+    </div>
+
+    <section id="in-app">
+      <h2><span class="num">01</span> Delete in the app</h2>
+      <p>Open Agla Kaam, open the menu, and tap <strong>Delete account</strong>. Confirm once more when asked. Your business profile and everything tied to it is removed immediately &mdash; you'll be signed out right after.</p>
+    </section>
+
+    <section id="by-email">
+      <h2><span class="num">02</span> Request by email</h2>
+      <p>If you no longer have the app installed, or would rather not do it yourself, email <a href="mailto:admin@velocrew.in">admin@velocrew.in</a> from the address registered on your account and ask us to delete it. Include your business name so we can find the right account. We'll confirm once it's done.</p>
+    </section>
+
+    <section id="partial">
+      <h2><span class="num">03</span> Delete only some data</h2>
+      <p>You don't have to delete your whole account to remove something. Individual customers, services, invoices, quotations, your logo, and your signature can each be deleted on their own &mdash; directly in the app, wherever that item appears. For anything you can't remove yourself, email us at <a href="mailto:admin@velocrew.in">admin@velocrew.in</a> describing what to delete.</p>
+    </section>
+
+    <section id="what-happens">
+      <h2><span class="num">04</span> What's deleted &amp; what's kept</h2>
+      <p>Deleting your account permanently removes your business profile, every customer record, service history, invoice, quotation, team member, and uploaded logo or signature &mdash; <strong>immediately</strong>. Nothing is retained on our servers afterward. Routine backups may retain a copy for a short operational window before they cycle out.</p>
+      <p>Payment records held by Razorpay, Google Play, or the App Store for completed transactions remain with those providers under their own retention rules &mdash; deleting your Agla Kaam account does not delete those.</p>
+    </section>
+
+    <section id="contact">
+      <h2><span class="num">05</span> Contact</h2>
+      <div class="fact-line"><span class="k">Entity</span><span class="v">VeloCrew &middot; UDYAM-KL-13-0110771</span></div>
+      <div class="fact-line"><span class="k">Address</span><span class="v">Chittilappilly House, Thrissur, Puzhakkal Block Panchayat, Thrissur District, Kerala 680552, India</span></div>
+      <div class="fact-line"><span class="k">Email</span><span class="v"><a href="mailto:admin@velocrew.in">admin@velocrew.in</a></span></div>
+      <div class="fact-line"><span class="k">Phone</span><span class="v"><a href="tel:+919562994337">+91 95629 94337</a></span></div>
+    </section>
+  </main>
+</div>
+
+<footer>
+  <div class="footer-inner">
+    <div class="footer-block">
+      <p class="label">Agla Kaam</p>
+      <p>A product of VeloCrew</p>
+      <p>UDYAM-KL-13-0110771</p>
+    </div>
+    <div class="footer-block">
+      <p class="label">Registered office</p>
+      <p>Chittilappilly House, Thrissur</p>
+      <p>Puzhakkal Block Panchayat</p>
+      <p>Thrissur District, Kerala 680552, India</p>
+    </div>
+    <div class="footer-block">
+      <p class="label">Contact</p>
+      <p><a href="mailto:admin@velocrew.in">admin@velocrew.in</a></p>
+      <p><a href="tel:+919562994337">+91 95629 94337</a></p>
+    </div>
+  </div>
+</footer>
+`;
+
 export const PRIVACY_POLICY_HTML = page('Privacy Policy', PRIVACY_POLICY_BODY);
 export const TERMS_OF_SERVICE_HTML = page(
   'Terms of Service',
   TERMS_OF_SERVICE_BODY,
+);
+export const DELETE_ACCOUNT_HTML = page(
+  'Delete Your Account or Data',
+  DELETE_ACCOUNT_BODY,
 );

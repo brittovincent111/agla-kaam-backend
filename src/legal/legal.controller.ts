@@ -1,5 +1,9 @@
 import { Controller, Get, Header } from '@nestjs/common';
-import { PRIVACY_POLICY_HTML, TERMS_OF_SERVICE_HTML } from './legal.constants';
+import {
+  DELETE_ACCOUNT_HTML,
+  PRIVACY_POLICY_HTML,
+  TERMS_OF_SERVICE_HTML,
+} from './legal.constants';
 
 @Controller('legal')
 export class LegalController {
@@ -13,5 +17,14 @@ export class LegalController {
   @Header('Content-Type', 'text/html; charset=utf-8')
   termsOfService(): string {
     return TERMS_OF_SERVICE_HTML;
+  }
+
+  // Public page linked from the Google Play "Delete account URL" / "Delete
+  // data URL" store-listing fields — must be reachable without auth since
+  // it's meant for someone who no longer has the app installed.
+  @Get('delete-account')
+  @Header('Content-Type', 'text/html; charset=utf-8')
+  deleteAccount(): string {
+    return DELETE_ACCOUNT_HTML;
   }
 }
