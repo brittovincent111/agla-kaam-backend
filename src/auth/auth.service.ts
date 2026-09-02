@@ -165,9 +165,13 @@ export class AuthService {
 
     const ticket = await this.getGoogleClient(webClientId)
       .verifyIdToken({ idToken, audience: webClientId })
-      .catch(() => null);
+      .catch((err) => {
+        console.error('[loginWithGoogle] verifyIdToken failed:', err);
+        return null;
+      });
     const payload = ticket?.getPayload();
     if (!payload?.sub || !payload.email) {
+      console.error('[loginWithGoogle] missing sub/email in payload:', payload);
       throw new UnauthorizedException('Invalid Google sign-in');
     }
 
@@ -221,7 +225,13 @@ export class AuthService {
       audience: bundleId,
     })
       .then((result) => result.payload)
-      .catch(() => null);
+      .catch((err) => {
+        console.error(
+          `[loginWithApple] jwtVerify failed (expected audience=${bundleId}):`,
+          err,
+        );
+        return null;
+      });
     if (!payload?.sub) {
       throw new UnauthorizedException('Invalid Apple sign-in');
     }

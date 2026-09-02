@@ -177,15 +177,23 @@ export class SubscriptionsService {
     }
 
     const client = this.getRazorpayClient();
-    const order = await client.orders.create({
-      amount: amountPaise,
-      currency: 'INR',
-      notes: {
-        businessId,
-        tier,
-        teamEnabled: String(effectiveTeamEnabled),
-      },
-    });
+    console.log(
+      `[createOrder] businessId=${businessId} tier=${tier} teamEnabled=${effectiveTeamEnabled} amountPaise=${amountPaise}`,
+    );
+    const order = await client.orders
+      .create({
+        amount: amountPaise,
+        currency: 'INR',
+        notes: {
+          businessId,
+          tier,
+          teamEnabled: String(effectiveTeamEnabled),
+        },
+      })
+      .catch((err) => {
+        console.error('[createOrder] Razorpay order create failed:', err);
+        throw err;
+      });
 
     await this.paymentOrderModel.create({
       businessId,
@@ -397,8 +405,18 @@ export class SubscriptionsService {
       return { status: 'active' };
     }
 
-    const verification =
-      await this.appleVerificationService.verifyTransaction(transactionId);
+    console.log(
+      `[verifyAndActivateApplePurchase] businessId=${businessId} productId=${productId} transactionId=${transactionId}`,
+    );
+    const verification = await this.appleVerificationService
+      .verifyTransaction(transactionId)
+      .catch((err) => {
+        console.error(
+          '[verifyAndActivateApplePurchase] verifyTransaction failed:',
+          err,
+        );
+        throw err;
+      });
     if (!verification.isActive) {
       throw new ForbiddenException('This purchase is not active.');
     }

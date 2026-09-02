@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleInit,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import { Model } from 'mongoose';
@@ -56,7 +61,9 @@ const IMAGE_EXTENSIONS: Record<string, string> = {
 };
 
 @Injectable()
-export class BusinessesService {
+export class BusinessesService implements OnModuleInit {
+  private readonly logger = new Logger(BusinessesService.name);
+
   constructor(
     @InjectModel(Business.name)
     private readonly businessModel: Model<BusinessDocument>,
@@ -84,6 +91,22 @@ export class BusinessesService {
     private readonly servicePresetsService: ServicePresetsService,
     private readonly s3Service: S3Service,
   ) {}
+
+  // Mongoose only ever *creates* indexes that don't already exist — it
+  // never updates one whose options (e.g. sparse) changed after it was
+  // first built. The `phone`/`email`/`googleId`/`appleId` unique indexes
+  // were briefly non-sparse before this schema added `sparse: true`, which
+  // left the live index rejecting every second phone-less/Google/Apple
+  // account with a spurious E11000 on `null`. syncIndexes() brings the
+  // real MongoDB indexes back in line with the schema on every boot.
+  async onModuleInit(): Promise<void> {
+    try {
+      const result = await this.businessModel.syncIndexes();
+      this.logger.log(`Synced Business indexes: ${JSON.stringify(result)}`);
+    } catch (err) {
+      this.logger.error('Failed to sync Business indexes', err as Error);
+    }
+  }
 
   findByEmail(email: string): Promise<BusinessDocument | null> {
     return this.businessModel.findOne({ email: email.toLowerCase() }).exec();

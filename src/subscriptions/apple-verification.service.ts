@@ -117,15 +117,24 @@ export class AppleVerificationService {
       );
     }
     const jwt = await this.signRequestJWT();
-    const response = await fetch(
-      `${this.getHost()}/inApps/v1/transactions/${encodeURIComponent(transactionId)}`,
-      { headers: { Authorization: `Bearer ${jwt}` } },
-    );
+    const url = `${this.getHost()}/inApps/v1/transactions/${encodeURIComponent(transactionId)}`;
+    console.log(`[AppleVerificationService] GET ${url}`);
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${jwt}` },
+    });
     if (!response.ok) {
+      const errorBody = await response.text().catch(() => '<unreadable>');
+      console.error(
+        `[AppleVerificationService] Apple API returned ${response.status}: ${errorBody}`,
+      );
       return { isActive: false, transactionId, productId: '' };
     }
     const body = (await response.json()) as { signedTransactionInfo?: string };
     if (!body.signedTransactionInfo) {
+      console.error(
+        '[AppleVerificationService] response missing signedTransactionInfo:',
+        body,
+      );
       return { isActive: false, transactionId, productId: '' };
     }
     // The transport itself is the trust boundary here — this response came
