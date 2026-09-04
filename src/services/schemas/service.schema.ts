@@ -54,6 +54,14 @@ export class Service {
   // coming from a technician's phone out in the field.
   @Prop({ type: ServiceLocationSchema })
   location?: ServiceLocation;
+
+  // Absent means "use the customer's default assigned technician." Set two
+  // ways: the owner picks someone ahead of time to override the default for
+  // just this one visit (e.g. the usual technician is unavailable), or a
+  // technician logging their own visit is stamped here automatically as the
+  // attribution record of who actually did it.
+  @Prop({ type: Types.ObjectId, ref: 'TeamMember', index: true })
+  assignedTechnicianId?: Types.ObjectId;
 }
 
 export const ServiceSchema = SchemaFactory.createForClass(Service);

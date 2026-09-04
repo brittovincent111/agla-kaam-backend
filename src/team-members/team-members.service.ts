@@ -140,6 +140,27 @@ export class TeamMembersService {
     return member.save();
   }
 
+  // Shared by anywhere a technician id arrives as raw client input
+  // (assigning a customer, overriding a service) — without this, any Mongo
+  // id was accepted with no check that it's actually an active technician of
+  // this business.
+  async assertActiveMember(
+    businessId: string,
+    teamMemberId: string,
+  ): Promise<void> {
+    if (!Types.ObjectId.isValid(teamMemberId)) {
+      throw new NotFoundException('Technician not found');
+    }
+    const member = await this.teamMemberModel.findById(teamMemberId).exec();
+    if (
+      !member ||
+      member.businessId.toString() !== businessId ||
+      !member.active
+    ) {
+      throw new NotFoundException('Technician not found');
+    }
+  }
+
   async resetPassword(
     businessId: string,
     teamMemberId: string,

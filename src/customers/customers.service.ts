@@ -1,6 +1,8 @@
 import {
   ConflictException,
   ForbiddenException,
+  forwardRef,
+  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -12,6 +14,8 @@ import { CreateCustomerDto } from './dto/create-customer.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { tierHasUnlimitedCustomers } from '../common/constants/subscription-options';
+import { TeamMembersService } from '../team-members/team-members.service';
+import { ServicesService } from '../services/services.service';
 import type { AuthenticatedBusiness } from '../common/decorators/current-business.decorator';
 
 @Injectable()
@@ -21,6 +25,9 @@ export class CustomersService {
     private readonly customerModel: Model<CustomerDocument>,
     private readonly subscriptionsService: SubscriptionsService,
     private readonly configService: ConfigService,
+    private readonly teamMembersService: TeamMembersService,
+    @Inject(forwardRef(() => ServicesService))
+    private readonly servicesService: ServicesService,
   ) {}
 
   async create(
@@ -58,6 +65,7 @@ export class CustomersService {
       name: dto.name,
       phone: dto.phone,
       address: dto.address,
+      gstin: dto.gstin,
       source: dto.source ?? 'manual',
     });
   }
@@ -66,17 +74,43 @@ export class CustomersService {
     return this.customerModel.find({ businessId }).sort({ name: 1 }).exec();
   }
 
-  // A technician only sees customers assigned to them; the owner sees
+  // A technician sees a customer if either the customer's default is them,
+  // or they have at least one service directly reassigned to them for that
+  // customer — otherwise a job handed to a technician by the owner would
+  // show up in that technician's reminders feed with nowhere to tap through
+  // to (no customer detail, no way to log the next visit). The owner sees
   // everyone. Used for the customer-facing list/detail endpoints.
-  findAllForViewer(businessId: string, viewer: AuthenticatedBusiness): Promise<CustomerDocument[]> {
-    const query: Record<string, unknown> = { businessId };
-    if (viewer.role === 'technician') {
-      query.assignedTechnicianId = viewer.teamMemberId;
+  async findAllForViewer(
+    businessId: string,
+    viewer: AuthenticatedBusiness,
+  ): Promise<CustomerDocument[]> {
+    if (viewer.role !== 'technician') {
+      return this.customerModel.find({ businessId }).sort({ name: 1 }).exec();
     }
-    return this.customerModel.find(query).sort({ name: 1 }).exec();
+    const reassignedCustomerIds =
+      await this.servicesService.findAssignedServiceCustomerIds(
+        businessId,
+        viewer.teamMemberId!,
+      );
+    return this.customerModel
+      .find({
+        businessId,
+        $or: [
+          // Cast explicitly — a plain string nested inside $or isn't
+          // reliably cast against the schema by Mongoose (verified: it
+          // silently matched nothing when left as a string here).
+          { assignedTechnicianId: new Types.ObjectId(viewer.teamMemberId) },
+          { _id: { $in: reassignedCustomerIds } },
+        ],
+      })
+      .sort({ name: 1 })
+      .exec();
   }
 
-  async findAssignedCustomerIds(businessId: string, teamMemberId: string): Promise<string[]> {
+  async findAssignedCustomerIds(
+    businessId: string,
+    teamMemberId: string,
+  ): Promise<string[]> {
     const customers = await this.customerModel
       .find({ businessId, assignedTechnicianId: teamMemberId })
       .select('_id')
@@ -104,11 +138,20 @@ export class CustomersService {
     viewer: AuthenticatedBusiness,
   ): Promise<CustomerDocument> {
     const customer = await this.findOne(businessId, customerId);
-    if (
-      viewer.role === 'technician' &&
-      customer.assignedTechnicianId?.toString() !== viewer.teamMemberId
-    ) {
-      throw new NotFoundException('Customer not found');
+    if (viewer.role === 'technician') {
+      const isDefaultAssignee =
+        customer.assignedTechnicianId?.toString() === viewer.teamMemberId;
+      const hasReassignedService = !isDefaultAssignee
+        ? (
+            await this.servicesService.findAssignedServiceCustomerIds(
+              businessId,
+              viewer.teamMemberId!,
+            )
+          ).includes(customerId)
+        : false;
+      if (!isDefaultAssignee && !hasReassignedService) {
+        throw new NotFoundException('Customer not found');
+      }
     }
     return customer;
   }
@@ -119,7 +162,10 @@ export class CustomersService {
     location: { latitude: number; longitude: number; capturedAt: Date },
   ): Promise<void> {
     await this.customerModel
-      .updateOne({ _id: customerId, businessId }, { $set: { defaultLocation: location } })
+      .updateOne(
+        { _id: customerId, businessId },
+        { $set: { defaultLocation: location } },
+      )
       .exec();
   }
 
@@ -129,6 +175,16 @@ export class CustomersService {
     dto: UpdateCustomerDto,
   ): Promise<CustomerDocument> {
     const customer = await this.findOne(businessId, customerId);
+    // dto.assignedTechnicianId is `null` when the owner is unassigning —
+    // only a real id needs to be checked against the roster. This was
+    // previously accepted with no check that the id belongs to this
+    // business's active technicians at all.
+    if (dto.assignedTechnicianId) {
+      await this.teamMembersService.assertActiveMember(
+        businessId,
+        dto.assignedTechnicianId,
+      );
+    }
     Object.assign(customer, dto);
     return customer.save();
   }

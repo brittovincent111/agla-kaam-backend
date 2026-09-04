@@ -9,7 +9,6 @@ import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { randomInt } from 'crypto';
 import { OAuth2Client } from 'google-auth-library';
-import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { BusinessesService } from '../businesses/businesses.service';
 import { ServicePresetsService } from '../service-presets/service-presets.service';
 import { TeamMembersService } from '../team-members/team-members.service';
@@ -220,7 +219,9 @@ export class AuthService {
     const bundleId =
       this.configService.get<string>('APPLE_BUNDLE_ID') ?? 'com.aglakaam.app';
 
-    const payload = await jwtVerify(identityToken, this.getAppleJWKS(), {
+    const { jwtVerify } = await (eval('import("jose")') as Promise<typeof import('jose')>);
+    const jwks = await this.getAppleJWKS();
+    const payload = await jwtVerify(identityToken, jwks, {
       issuer: APPLE_ISSUER,
       audience: bundleId,
     })
@@ -273,9 +274,10 @@ export class AuthService {
     return this.issueOwnerToken(business);
   }
 
-  private appleJWKS?: ReturnType<typeof createRemoteJWKSet>;
-  private getAppleJWKS(): ReturnType<typeof createRemoteJWKSet> {
+  private appleJWKS?: any;
+  private async getAppleJWKS(): Promise<any> {
     if (!this.appleJWKS) {
+      const { createRemoteJWKSet } = await (eval('import("jose")') as Promise<typeof import('jose')>);
       this.appleJWKS = createRemoteJWKSet(new URL(APPLE_JWKS_URL));
     }
     return this.appleJWKS;

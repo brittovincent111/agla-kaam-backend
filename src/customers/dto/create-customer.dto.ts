@@ -22,6 +22,11 @@ export class CreateCustomerDto {
   address?: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(15)
+  gstin?: string;
+
+  @IsOptional()
   @IsIn(['contacts', 'manual'])
   source?: 'contacts' | 'manual';
 }

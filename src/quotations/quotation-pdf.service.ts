@@ -98,7 +98,7 @@ export class QuotationPdfService {
       logo?: Buffer;
       signature?: Buffer;
     },
-    customer: { name: string; phone: string; address?: string },
+    customer: { name: string; phone: string; address?: string; gstin?: string },
     quotation: Quotation,
     templateId?: DocumentTemplateId,
   ): Promise<Buffer> {
@@ -309,7 +309,7 @@ export class QuotationPdfService {
   private drawBillingInfo(
     doc: PDFKit.PDFDocument,
     quotation: Quotation,
-    customer: { name: string; phone: string; address?: string },
+    customer: { name: string; phone: string; address?: string; gstin?: string },
     top: number,
     theme: DocumentTemplateTheme,
   ): number {
@@ -333,11 +333,20 @@ export class QuotationPdfService {
       .fontSize(10)
       .fillColor(colors.textSecondary)
       .text(customer.phone, M, top + 32);
-    let addressHeight = 0;
+    let customerDetailsHeight = 0;
     if (customer.address) {
       doc.font('Helvetica').fontSize(9).fillColor(colors.textSecondary);
-      addressHeight = doc.heightOfString(customer.address, { width: 260 });
+      customerDetailsHeight = doc.heightOfString(customer.address, { width: 260 });
       doc.text(customer.address, M, top + 47, { width: 260 });
+    }
+    if (customer.gstin) {
+      const gstinY = top + 47 + customerDetailsHeight + (customer.address ? 4 : 0);
+      doc
+        .font('Helvetica-Bold')
+        .fontSize(9)
+        .fillColor(colors.textSecondary)
+        .text(`GSTIN: ${customer.gstin}`, M, gstinY, { width: 260 });
+      customerDetailsHeight += (customer.address ? 4 : 0) + 12;
     }
 
     const detailRow = (label: string, value: string, rowY: number) => {
@@ -358,7 +367,7 @@ export class QuotationPdfService {
     detailRow('Quotation date', formatDate(quotation.quotationDate), top);
     detailRow('Valid until', formatDate(quotation.validUntil), top + 16);
 
-    return top + Math.max(BILLING_BLOCK_HEIGHT, 47 + addressHeight + 12);
+    return top + Math.max(BILLING_BLOCK_HEIGHT, 47 + customerDetailsHeight + 12);
   }
 
   private drawItemsTable(

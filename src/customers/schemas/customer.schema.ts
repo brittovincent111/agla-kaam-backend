@@ -1,6 +1,9 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
-import { ServiceLocation, ServiceLocationSchema } from '../../services/schemas/service.schema';
+import {
+  ServiceLocation,
+  ServiceLocationSchema,
+} from '../../services/schemas/service.schema';
 
 export type CustomerDocument = HydratedDocument<Customer>;
 
@@ -17,6 +20,9 @@ export class Customer {
 
   @Prop({ trim: true, maxlength: 200 })
   address?: string;
+
+  @Prop({ trim: true, uppercase: true, maxlength: 15 })
+  gstin?: string;
 
   @Prop({ required: true, enum: ['contacts', 'manual'], default: 'manual' })
   source: 'contacts' | 'manual';

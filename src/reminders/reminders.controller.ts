@@ -60,6 +60,7 @@ export class RemindersController {
     const service = await this.servicesService.findOne(
       business.businessId,
       serviceId,
+      business,
     );
     const customer = await this.customersService.findOne(
       business.businessId,

@@ -396,7 +396,7 @@ export class SubscriptionsService {
     }
 
     const transactionId =
-      this.appleVerificationService.extractTransactionId(purchaseToken);
+      await this.appleVerificationService.extractTransactionId(purchaseToken);
 
     const existing = await this.applePurchaseModel
       .findOne({ transactionId })

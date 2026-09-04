@@ -5,7 +5,18 @@ import { Quotation } from '../quotations/schemas/quotation.schema';
 // Fixed dummy content for template previews — rendered with the viewing
 // business's own name/address/GSTIN so the preview looks like a real
 // document, but no real customer or invoice data is ever touched.
-export const SAMPLE_CUSTOMER = { name: 'Ravi Kumar', phone: '+91 98765 43210' };
+// Address is long enough to wrap to two lines, and gstin is present, on
+// purpose — these are exactly the two optional fields that expand the
+// "Billed to" block's height, so leaving them out of the sample data (as
+// this did before) meant the preview never demonstrated that part of the
+// layout at all, even though real invoices/quotations with a customer that
+// has these set render correctly.
+export const SAMPLE_CUSTOMER = {
+  name: 'Ravi Kumar',
+  phone: '+91 98765 43210',
+  address: 'Door No 14/220, Chittilappilly Building, Near Poothole Junction, Thrissur, Kerala 680004',
+  gstin: '32ABCDE1234F1Z5',
+};
 
 const SAMPLE_ITEMS = [
   {

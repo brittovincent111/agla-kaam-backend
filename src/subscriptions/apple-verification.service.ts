@@ -4,7 +4,6 @@ import {
   InternalServerErrorException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { SignJWT, importPKCS8, decodeJwt } from 'jose';
 
 const PRODUCTION_HOST = 'https://api.storekit.itunes.apple.com';
 const SANDBOX_HOST = 'https://api.storekit-sandbox.itunes.apple.com';
@@ -54,7 +53,7 @@ export class AppleVerificationService {
     return env === 'sandbox' ? SANDBOX_HOST : PRODUCTION_HOST;
   }
 
-  private getSigningKey(): Promise<CryptoKey> {
+  private async getSigningKey(): Promise<CryptoKey> {
     if (!this.signingKeyPromise) {
       const pem = this.configService.get<string>('APPLE_IAP_PRIVATE_KEY');
       if (!pem) {
@@ -65,6 +64,7 @@ export class AppleVerificationService {
       // .env files can't hold real newlines — the key is stored with
       // literal "\n" sequences and unescaped here, same convention as
       // other multi-line secrets.
+      const { importPKCS8 } = await (eval('import("jose")') as Promise<typeof import('jose')>);
       this.signingKeyPromise = importPKCS8(pem.replace(/\\n/g, '\n'), 'ES256');
     }
     return this.signingKeyPromise;
@@ -80,6 +80,7 @@ export class AppleVerificationService {
     }
     const key = await this.getSigningKey();
     const now = Math.floor(Date.now() / 1000);
+    const { SignJWT } = await (eval('import("jose")') as Promise<typeof import('jose')>);
     return new SignJWT({ bid: this.getBundleId() })
       .setProtectedHeader({ alg: 'ES256', kid: keyId, typ: 'JWT' })
       .setIssuer(issuerId)
@@ -93,19 +94,31 @@ export class AppleVerificationService {
   // Purchase.purchaseToken on iOS), pulls the transactionId out of it —
   // this is only used to know which transaction to ask Apple about next;
   // it is not itself trusted as proof of anything.
-  extractTransactionId(signedTransaction: string): string {
-    let payload: AppleTransactionInfo;
-    try {
-      payload = decodeJwt(signedTransaction) as AppleTransactionInfo;
-    } catch {
+  async extractTransactionId(signedTransaction: string): Promise<string> {
+    if (!signedTransaction || typeof signedTransaction !== 'string') {
       throw new BadRequestException('This purchase token is not valid.');
     }
-    if (!payload.transactionId) {
-      throw new BadRequestException(
-        'Could not read a transaction id from this purchase.',
-      );
+    const trimmed = signedTransaction.trim();
+
+    if (trimmed.includes('.')) {
+      try {
+        const { decodeJwt } = await (eval('import("jose")') as Promise<typeof import('jose')>);
+        const payload = decodeJwt(trimmed) as AppleTransactionInfo;
+        if (payload?.transactionId) {
+          return payload.transactionId;
+        }
+      } catch {
+        throw new BadRequestException('This purchase token is not valid.');
+      }
     }
-    return payload.transactionId;
+
+    if (/^[a-zA-Z0-9_-]+$/.test(trimmed)) {
+      return trimmed;
+    }
+
+    throw new BadRequestException(
+      'Could not read a transaction id from this purchase.',
+    );
   }
 
   async verifyTransaction(
@@ -117,11 +130,29 @@ export class AppleVerificationService {
       );
     }
     const jwt = await this.signRequestJWT();
-    const url = `${this.getHost()}/inApps/v1/transactions/${encodeURIComponent(transactionId)}`;
-    console.log(`[AppleVerificationService] GET ${url}`);
-    const response = await fetch(url, {
-      headers: { Authorization: `Bearer ${jwt}` },
-    });
+    const primaryHost = this.getHost();
+    const fallbackHost =
+      primaryHost === PRODUCTION_HOST ? SANDBOX_HOST : PRODUCTION_HOST;
+
+    let response = await fetch(
+      `${primaryHost}/inApps/v1/transactions/${encodeURIComponent(transactionId)}`,
+      { headers: { Authorization: `Bearer ${jwt}` } },
+    );
+
+    // If primary host fails (e.g. TestFlight transaction sent to Production host or vice versa), fallback.
+    if (!response.ok) {
+      console.log(
+        `[AppleVerificationService] Primary host (${primaryHost}) returned ${response.status}. Trying fallback host (${fallbackHost})...`,
+      );
+      const fallbackResponse = await fetch(
+        `${fallbackHost}/inApps/v1/transactions/${encodeURIComponent(transactionId)}`,
+        { headers: { Authorization: `Bearer ${jwt}` } },
+      );
+      if (fallbackResponse.ok) {
+        response = fallbackResponse;
+      }
+    }
+
     if (!response.ok) {
       const errorBody = await response.text().catch(() => '<unreadable>');
       console.error(
@@ -141,6 +172,7 @@ export class AppleVerificationService {
     // straight from Apple's own API over HTTPS in reply to our own signed
     // request, so decoding (not re-verifying) the JWS payload is enough,
     // the same trust model used for Google Play's subscriptionsv2.get.
+    const { decodeJwt } = await (eval('import("jose")') as Promise<typeof import('jose')>);
     const info = decodeJwt(body.signedTransactionInfo) as AppleTransactionInfo;
     const isActive =
       !info.revocationDate &&

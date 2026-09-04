@@ -35,7 +35,7 @@ export class ServicesController {
     @CurrentBusiness() business: AuthenticatedBusiness,
     @Param('id') id: string,
   ) {
-    return this.servicesService.findOne(business.businessId, id);
+    return this.servicesService.findOne(business.businessId, id, business);
   }
 
   @Patch(':id/reschedule')
@@ -48,6 +48,8 @@ export class ServicesController {
       business.businessId,
       id,
       dto.nextServiceDate,
+      business,
+      dto.assignedTechnicianId,
     );
   }
 

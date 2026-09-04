@@ -55,4 +55,12 @@ export class CreateServiceDto {
   @ValidateNested()
   @Type(() => ServiceLocationDto)
   location?: ServiceLocationDto;
+
+  // Owner-only in practice: a technician's own create request has this
+  // overridden server-side to themselves regardless of what's sent here (see
+  // ServicesService.create), so this field only ever takes effect when the
+  // caller is the owner assigning the visit to someone else ahead of time.
+  @IsOptional()
+  @IsMongoId()
+  assignedTechnicianId?: string;
 }
