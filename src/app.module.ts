@@ -20,6 +20,7 @@ import { TeamMembersModule } from './team-members/team-members.module';
 import { DocumentTemplatesModule } from './document-templates/document-templates.module';
 import { AppFeedbackModule } from './app-feedback/app-feedback.module';
 import { LegalModule } from './legal/legal.module';
+import { AdminModule } from './admin/admin.module';
 import { validate } from './env.validation';
 
 @Module({
@@ -65,6 +66,7 @@ import { validate } from './env.validation';
     DocumentTemplatesModule,
     AppFeedbackModule,
     LegalModule,
+    AdminModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],

@@ -9,6 +9,7 @@ import {
   BusinessDocument,
 } from '../businesses/schemas/business.schema';
 import { DEFAULT_REMINDER_TEMPLATE, renderMessageTemplate } from '../common/utils/message-template';
+import { toWhatsAppNumber } from '../common/utils/phone';
 
 function startOfDay(date: Date): Date {
   const d = new Date(date);
@@ -63,24 +64,45 @@ export class RemindersService {
   }
 
   buildWhatsAppLink(phone: string, message: string): string {
-    const digitsOnly = phone.replace(/[^\d]/g, '');
-    return `https://wa.me/${digitsOnly}?text=${encodeURIComponent(message)}`;
+    return `https://wa.me/${toWhatsAppNumber(phone)}?text=${encodeURIComponent(message)}`;
   }
 
-  // Daily sweep across all businesses. Push notifications are not wired up yet —
-  // this is where an FCM dispatch call would go once the mobile app registers
-  // device tokens. For now it just logs counts so the pipeline is testable end-to-end.
+  // Daily morning sweep across all businesses. Dispatches Expo Push Notifications
+  // to registered technician devices for services due today.
   @Cron(CronExpression.EVERY_DAY_AT_8AM)
   async computeDueTodayForAllBusinesses(): Promise<void> {
     const businesses = await this.businessModel
-      .find()
-      .select('_id name')
+      .find({ pushToken: { $exists: true, $ne: '' } })
+      .select('_id name pushToken')
       .exec();
+
     for (const business of businesses) {
+      if (!business.pushToken) continue;
       const due = await this.dueToday(business.id);
       if (due.length > 0) {
-        this.logger.log(`${business.name}: ${due.length} service(s) due today`);
-        // TODO: dispatch FCM push notification(s) to this business's registered device(s).
+        this.logger.log(`Dispatching 8 AM push to ${business.name}: ${due.length} service(s) due today`);
+
+        try {
+          await fetch('https://exp.host/--/api/v2/push/send', {
+            method: 'POST',
+            headers: {
+              Accept: 'application/json',
+              'Accept-encoding': 'gzip, deflate',
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify([
+              {
+                to: business.pushToken,
+                sound: 'default',
+                title: `🔔 ${due.length} Service(s) Due Today!`,
+                body: `You have ${due.length} customer service visit(s) scheduled for today. Tap to open Agla Kaam.`,
+                data: { screen: 'Reminders' },
+              },
+            ]),
+          });
+        } catch (err: any) {
+          this.logger.error(`Failed to dispatch push to ${business.name}: ${err.message}`);
+        }
       }
     }
   }

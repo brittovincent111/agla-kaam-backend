@@ -34,9 +34,18 @@ export class CustomersService {
     businessId: string,
     dto: CreateCustomerDto,
   ): Promise<CustomerDocument> {
-    const existing = await this.customerModel
-      .findOne({ businessId, phone: dto.phone })
-      .exec();
+    // The app now sends E.164 ("+919876543210"), but customers added before
+    // that — or through the contact picker — are stored as "9876543210",
+    // "098765 43210" and so on. Matching on the last 10 digits keeps the
+    // duplicate check working across every format already in the collection,
+    // instead of letting the same person be added twice under two spellings.
+    const nationalDigits = dto.phone.replace(/\D/g, '').slice(-10);
+    const existing = nationalDigits
+      ? await this.customerModel
+          // nationalDigits is digits-only, so it is safe to interpolate.
+          .findOne({ businessId, phone: { $regex: `${nationalDigits}$` } })
+          .exec()
+      : null;
     if (existing) {
       throw new ConflictException({
         message: 'A customer with this phone number already exists.',

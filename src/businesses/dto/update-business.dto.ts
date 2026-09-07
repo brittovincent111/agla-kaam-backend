@@ -25,6 +25,16 @@ export class UpdateBusinessDto {
   @IsEmail()
   email?: string;
 
+  // Collected at onboarding when the account has none — a Google/Apple sign-up
+  // never supplies one, and business.phone is what the web checkout looks an
+  // account up by, and what prints as the contact line on every invoice and
+  // quotation PDF. Unique (sparse) on the schema, so update() maps a duplicate
+  // to a 409 rather than letting the index throw.
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  phone?: string;
+
   @IsOptional()
   @IsString()
   @MaxLength(15)

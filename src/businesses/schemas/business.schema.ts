@@ -108,6 +108,9 @@ export class Business {
   @Prop({ trim: true, maxlength: 2000 })
   defaultQuotationTerms?: string;
 
+  @Prop({ trim: true })
+  pushToken?: string;
+
   // S3 object key holding the actual image bytes (bucket: S3_BUCKET env) —
   // select:false so a normal /businesses/me fetch never needs these; the
   // dedicated /businesses/me/logo endpoint looks them up to stream from S3.

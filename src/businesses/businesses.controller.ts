@@ -173,6 +173,18 @@ export class BusinessesController {
   // could be anything. Sniff the actual bytes and use that as the source of
   // truth for both validation and what gets stored/served back as the
   // object's Content-Type.
+  @Post('me/push-token')
+  async updatePushToken(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Body() body: { pushToken: string },
+  ) {
+    if (!body.pushToken) {
+      throw new BadRequestException('pushToken is required');
+    }
+    await this.businessesService.updatePushToken(business.businessId, body.pushToken);
+    return { success: true };
+  }
+
   private assertValidImage(file?: Express.Multer.File): string {
     if (!file) {
       throw new BadRequestException('No file uploaded');

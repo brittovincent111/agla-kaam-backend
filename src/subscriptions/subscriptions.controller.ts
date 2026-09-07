@@ -64,6 +64,22 @@ export class SubscriptionsController {
     );
   }
 
+  @Post('lookup-account')
+  lookupAccount(@Body() dto: { identifier: string }) {
+    return this.subscriptionsService.lookupWebAccount(dto.identifier);
+  }
+
+  @Post('create-web-order')
+  createWebOrder(
+    @Body() dto: { identifier?: string; phone?: string; tier: any; teamEnabled?: boolean },
+  ) {
+    return this.subscriptionsService.createWebOrder(
+      dto.identifier || dto.phone || '',
+      dto.tier,
+      dto.teamEnabled,
+    );
+  }
+
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('owner')
   @Throttle({ default: { limit: 10, ttl: 60000 } })

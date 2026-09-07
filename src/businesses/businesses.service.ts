@@ -1,4 +1,5 @@
 import {
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -110,6 +111,19 @@ export class BusinessesService implements OnModuleInit {
 
   findByEmail(email: string): Promise<BusinessDocument | null> {
     return this.businessModel.findOne({ email: email.toLowerCase() }).exec();
+  }
+
+  findByPhone(phone: string): Promise<BusinessDocument | null> {
+    return this.businessModel.findOne({ phone: phone.trim() }).exec();
+  }
+
+  findByPhoneOrEmail(identifier: string): Promise<BusinessDocument | null> {
+    const clean = identifier.trim().toLowerCase();
+    return this.businessModel
+      .findOne({
+        $or: [{ phone: identifier.trim() }, { email: clean }],
+      })
+      .exec();
   }
 
   // passwordHash has select:false on the schema — only AuthService's login
@@ -278,9 +292,22 @@ export class BusinessesService implements OnModuleInit {
     const before = await this.findById(id);
     const isFirstTradeSelection = !before.tradeType && !!dto.tradeType;
 
+    // phone and email are both sparse-unique. Without this the index throws a
+    // raw E11000 and the client gets a 500, where the real answer is "that
+    // number already belongs to another account" — which is also the hint a
+    // returning user needs when they've accidentally created a second account.
     const business = await this.businessModel
       .findByIdAndUpdate(id, dto, { new: true })
-      .exec();
+      .exec()
+      .catch((err: { code?: number; keyPattern?: Record<string, unknown> }) => {
+        if (err?.code === 11000) {
+          const field = err.keyPattern?.phone ? 'phone number' : 'email address';
+          throw new ConflictException(
+            `That ${field} is already used by another account. Sign in to that account instead.`,
+          );
+        }
+        throw err;
+      });
     if (!business) {
       throw new NotFoundException('Business not found');
     }
@@ -479,5 +506,9 @@ export class BusinessesService implements OnModuleInit {
       throw new NotFoundException('Business not found');
     }
     return business;
+  }
+
+  async updatePushToken(id: string, pushToken: string): Promise<void> {
+    await this.businessModel.findByIdAndUpdate(id, { pushToken }).exec();
   }
 }

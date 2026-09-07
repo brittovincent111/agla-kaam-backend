@@ -213,6 +213,63 @@ export class SubscriptionsService {
     };
   }
 
+  // Looks up technician account by phone or email for real-time web verification
+  async lookupWebAccount(identifier: string) {
+    if (!identifier || identifier.trim().length < 3) {
+      return { exists: false };
+    }
+    const business = await this.businessesService.findByPhoneOrEmail(identifier);
+    if (!business) {
+      return { exists: false };
+    }
+    return {
+      exists: true,
+      businessName: business.name,
+      phone: business.phone,
+      email: business.email,
+      tradeType: business.tradeType,
+    };
+  }
+
+  // Creates a web order looked up by technician's phone number or email address
+  async createWebOrder(
+    identifier: string,
+    tier: SubscriptionTier,
+    teamEnabled = false,
+  ): Promise<CreatedOrder> {
+    const business = await this.businessesService.findByPhoneOrEmail(identifier);
+    if (business) {
+      return this.createOrder(business._id.toString(), tier, teamEnabled);
+    }
+
+    const effectiveTeamEnabled = tierAllowsTeam(tier) && teamEnabled;
+    const amountPaise = getPlanAmountRupees(tier, effectiveTeamEnabled) * 100;
+    const keyId = this.configService.get<string>('RAZORPAY_KEY_ID');
+    if (!keyId) {
+      throw new InternalServerErrorException(
+        'Razorpay is not configured on this server.',
+      );
+    }
+
+    const client = this.getRazorpayClient();
+    const order = await client.orders.create({
+      amount: amountPaise,
+      currency: 'INR',
+      notes: {
+        identifier,
+        tier,
+        teamEnabled: String(effectiveTeamEnabled),
+      },
+    });
+
+    return {
+      orderId: order.id,
+      amount: amountPaise,
+      currency: order.currency,
+      keyId,
+    };
+  }
+
   // Razorpay is the only thing that can activate a real subscription: the
   // webhook signature is verified against the raw body before anything in
   // the payload is trusted, and the amount/plan were already fixed
