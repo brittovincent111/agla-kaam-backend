@@ -25,6 +25,12 @@ export class Invoice {
   @Prop({ required: true, enum: INVOICE_STATUSES, default: 'draft', index: true })
   status: InvoiceStatus;
 
+  @Prop({ required: true, default: 'INR', uppercase: true, trim: true })
+  currency: string;
+
+  @Prop({ required: true, default: 'gst', enum: ['gst', 'vat', 'sales_tax', 'none'] })
+  taxType: string;
+
   @Prop({ type: [InvoiceItemSchema], default: [] })
   items: InvoiceItem[];
 

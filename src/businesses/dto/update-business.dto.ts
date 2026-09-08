@@ -1,4 +1,12 @@
-import { IsEmail, IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsBoolean,
+  IsEmail,
+  IsIn,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
+import { KNOWN_COUNTRY_CODES } from '../../common/utils/geo-defaults';
 
 export class UpdateBusinessDto {
   @IsOptional()
@@ -40,6 +48,35 @@ export class UpdateBusinessDto {
   @MaxLength(15)
   gstin?: string;
 
+  // Drives subscription pricing (see SubscriptionsService.createOrder) —
+  // restricted to the countries pricing actually exists for, rather than any
+  // 2-character string, since an unrecognized code would otherwise silently
+  // resolve to the cheapest (India) price.
+  @IsOptional()
+  @IsString()
+  @IsIn(KNOWN_COUNTRY_CODES)
+  country?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(5)
+  currency?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  timezone?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsIn(['gst', 'vat', 'sales_tax', 'none'])
+  taxType?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  taxRegistrationNumber?: string;
+
   @IsOptional()
   @IsString()
   @MaxLength(2000)
@@ -49,4 +86,33 @@ export class UpdateBusinessDto {
   @IsString()
   @MaxLength(2000)
   defaultQuotationTerms?: string;
+
+  // Payment instructions printed on invoices — see Business schema.
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  paymentUpiId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  paymentBankName?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  paymentAccountNumber?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  paymentAccountCode?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  acceptsCash?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  showPaymentDetailsOnInvoice?: boolean;
 }

@@ -88,8 +88,22 @@ export class Business {
   @Prop({ unique: true, sparse: true, index: true })
   appleId?: string;
 
-  // Presence of a GSTIN is what turns on GST-style tax display (CGST/SGST
-  // split) on invoices — there's no separate "GST enabled" toggle.
+  @Prop({ required: true, default: 'IN', uppercase: true, trim: true })
+  country: string;
+
+  @Prop({ required: true, default: 'INR', uppercase: true, trim: true })
+  currency: string;
+
+  @Prop({ required: true, default: 'Asia/Kolkata', trim: true })
+  timezone: string;
+
+  @Prop({ required: true, default: 'gst', enum: ['gst', 'vat', 'sales_tax', 'none'] })
+  taxType: string;
+
+  @Prop({ trim: true, uppercase: true })
+  taxRegistrationNumber?: string;
+
+  // Legacy field for Indian GSTIN compatibility
   @Prop({ trim: true, uppercase: true })
   gstin?: string;
 
@@ -99,6 +113,15 @@ export class Business {
   @Prop({ enum: DOCUMENT_TEMPLATE_IDS, default: DEFAULT_DOCUMENT_TEMPLATE_ID })
   invoiceTemplateId: DocumentTemplateId;
 
+  // The business's chosen document accent, as '#RRGGBB'. Independent of
+  // invoiceTemplateId: any accent works with any layout, because the whole
+  // document palette is derived from it (see common/pdf/document-colors.ts).
+  // Unset means "use the chosen layout's own default accent". Set only via
+  // DocumentTemplatesController, which enforces the same tier gate as the
+  // template choice.
+  @Prop({ trim: true, uppercase: true })
+  documentAccentColor?: string;
+
   // Prefills Invoice/Quotation.termsAndConditions when a new one is
   // created — same "default that can be overridden per-document" pattern
   // as ServicePreset.messageTemplate.
@@ -107,6 +130,36 @@ export class Business {
 
   @Prop({ trim: true, maxlength: 2000 })
   defaultQuotationTerms?: string;
+
+  // How a customer is meant to pay. Printed as the "Payment Information"
+  // block on invoice PDFs — every field optional, and the block is omitted
+  // entirely when none are set rather than printing an empty heading.
+  // Deliberately generic enough for every supported country: UPI is
+  // India-only, but bank name + account + code covers IFSC (IN), IBAN (Gulf)
+  // and routing numbers alike, labelled per country at render time.
+  @Prop({ trim: true, maxlength: 100 })
+  paymentUpiId?: string;
+
+  @Prop({ trim: true, maxlength: 100 })
+  paymentBankName?: string;
+
+  @Prop({ trim: true, maxlength: 40 })
+  paymentAccountNumber?: string;
+
+  @Prop({ trim: true, maxlength: 40 })
+  paymentAccountCode?: string;
+
+  @Prop({ default: false })
+  acceptsCash: boolean;
+
+  // Master switch for the "Payment Information" block on invoice PDFs.
+  // Separate from whether any details are filled in: a business may want to
+  // keep its bank details on file but leave them off a particular run of
+  // invoices (cash-only jobs, a customer who always pays by card) without
+  // deleting and re-typing them. Defaults on, so a business that fills the
+  // fields in sees them without hunting for a switch.
+  @Prop({ default: true })
+  showPaymentDetailsOnInvoice: boolean;
 
   @Prop({ trim: true })
   pushToken?: string;

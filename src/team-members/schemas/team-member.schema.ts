@@ -41,8 +41,26 @@ export class TeamMember {
   @Prop({ required: true, select: false })
   passwordHash: string;
 
+  // A technician is created by their owner with an email and password, but the
+  // login screen offers Google/Apple alongside those fields and they will tap
+  // them. Storing the provider id lets AuthService recognise the technician on
+  // the next social sign-in instead of treating them as a brand-new business.
+  // Sparse-unique, same pattern as Business.googleId/appleId.
+  @Prop({ unique: true, sparse: true, index: true })
+  googleId?: string;
+
+  @Prop({ unique: true, sparse: true, index: true })
+  appleId?: string;
+
   @Prop({ default: true })
   active: boolean;
+
+  // This technician's own device token. Deliberately NOT stored on the
+  // business: a technician authenticates with their owner's businessId, so a
+  // single shared field would have each new technician login overwrite the
+  // owner's token and silently stop the owner's reminders.
+  @Prop({ trim: true })
+  pushToken?: string;
 }
 
 export const TeamMemberSchema = SchemaFactory.createForClass(TeamMember);

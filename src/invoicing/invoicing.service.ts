@@ -9,6 +9,7 @@ import { RecordPaymentDto } from './dto/record-payment.dto';
 import { CustomersService } from '../customers/customers.service';
 import { ServicesService } from '../services/services.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
+import { BusinessesService } from '../businesses/businesses.service';
 import { calculateInvoiceTotals, computeDisplayStatus } from '../common/constants/invoice-options';
 import { FREE_TIER_INVOICE_LIMIT, tierHasInvoicing } from '../common/constants/subscription-options';
 
@@ -28,6 +29,7 @@ export class InvoicingService {
     private readonly customersService: CustomersService,
     private readonly servicesService: ServicesService,
     private readonly subscriptionsService: SubscriptionsService,
+    private readonly businessesService: BusinessesService,
   ) {}
 
   private withDisplayStatus(invoice: InvoiceDocument): Invoice & { _id: Types.ObjectId } {
@@ -86,6 +88,11 @@ export class InvoicingService {
 
     await this.customersService.findOne(businessId, dto.customerId);
 
+    // Snapshotted onto the invoice below rather than read live at render
+    // time — a later change to the business's currency/tax setup must not
+    // retroactively relabel an invoice that already went out to a customer.
+    const business = await this.businessesService.findById(businessId);
+
     const items = await this.buildItems(businessId, dto.customerId, dto.items);
     const totals = calculateInvoiceTotals(items, dto.discount ?? 0);
     const invoiceDate = dto.invoiceDate ? new Date(dto.invoiceDate) : new Date();
@@ -99,6 +106,8 @@ export class InvoicingService {
       invoiceDate,
       dueDate,
       status: 'draft',
+      currency: business.currency || 'INR',
+      taxType: business.taxType || 'gst',
       items,
       subtotal: totals.subtotal,
       discount: totals.discount,
@@ -187,8 +196,11 @@ export class InvoicingService {
 
   async update(businessId: string, invoiceId: string, dto: UpdateInvoiceDto): Promise<InvoiceDocument> {
     const invoice = await this.findOne(businessId, invoiceId);
-    if (invoice.status !== 'draft') {
-      throw new BadRequestException('Only draft invoices can be edited');
+    if (invoice.status === 'cancelled') {
+      throw new BadRequestException('Cannot edit a cancelled invoice');
+    }
+    if (invoice.status === 'paid') {
+      throw new BadRequestException('Cannot edit a fully paid invoice. Record a payment adjustment or delete payments first.');
     }
 
     const customerId = invoice.customerId.toString();
@@ -209,7 +221,11 @@ export class InvoicingService {
     invoice.discount = totals.discount;
     invoice.taxTotal = totals.taxTotal;
     invoice.total = totals.total;
-    invoice.balanceDue = Math.max(0, totals.total - invoice.amountPaid);
+    invoice.balanceDue = Math.max(0, Math.round((totals.total - invoice.amountPaid + Number.EPSILON) * 100) / 100);
+
+    if (invoice.amountPaid > 0) {
+      invoice.status = invoice.balanceDue <= 0 ? 'paid' : 'partially_paid';
+    }
 
     return invoice.save();
   }

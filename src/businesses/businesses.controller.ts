@@ -23,6 +23,7 @@ import {
 } from '../common/decorators/current-business.decorator';
 import { BusinessesService } from './businesses.service';
 import { UpdateBusinessDto } from './dto/update-business.dto';
+import { UpdatePushTokenDto } from './dto/update-push-token.dto';
 
 const MAX_IMAGE_BYTES = 3 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
@@ -173,15 +174,26 @@ export class BusinessesController {
   // could be anything. Sniff the actual bytes and use that as the source of
   // truth for both validation and what gets stored/served back as the
   // object's Content-Type.
+  // Routed by role on purpose. A technician's JWT carries their OWNER's
+  // businessId, so writing every caller's token to Business.pushToken would
+  // have each technician login replace the owner's token — silently ending
+  // the owner's reminders. Technicians get their own field on TeamMember.
   @Post('me/push-token')
   async updatePushToken(
     @CurrentBusiness() business: AuthenticatedBusiness,
-    @Body() body: { pushToken: string },
+    @Body() dto: UpdatePushTokenDto,
   ) {
-    if (!body.pushToken) {
-      throw new BadRequestException('pushToken is required');
+    if (business.role === 'technician' && business.teamMemberId) {
+      await this.businessesService.updateTeamMemberPushToken(
+        business.teamMemberId,
+        dto.pushToken,
+      );
+    } else {
+      await this.businessesService.updatePushToken(
+        business.businessId,
+        dto.pushToken,
+      );
     }
-    await this.businessesService.updatePushToken(business.businessId, body.pushToken);
     return { success: true };
   }
 

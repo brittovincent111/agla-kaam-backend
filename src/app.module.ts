@@ -21,6 +21,7 @@ import { DocumentTemplatesModule } from './document-templates/document-templates
 import { AppFeedbackModule } from './app-feedback/app-feedback.module';
 import { LegalModule } from './legal/legal.module';
 import { AdminModule } from './admin/admin.module';
+import { AmcModule } from './amc/amc.module';
 import { validate } from './env.validation';
 
 @Module({
@@ -67,6 +68,7 @@ import { validate } from './env.validation';
     AppFeedbackModule,
     LegalModule,
     AdminModule,
+    AmcModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],

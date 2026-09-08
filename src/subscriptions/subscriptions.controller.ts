@@ -21,6 +21,8 @@ import {
 import { SubscriptionsService } from './subscriptions.service';
 import { ActivateSubscriptionDto } from './dto/activate-subscription.dto';
 import { CreateOrderDto } from './dto/create-order.dto';
+import { CreateWebOrderDto } from './dto/create-web-order.dto';
+import { LookupAccountDto } from './dto/lookup-account.dto';
 import { VerifyPlayPurchaseDto } from './dto/verify-play-purchase.dto';
 import { VerifyApplePurchaseDto } from './dto/verify-apple-purchase.dto';
 
@@ -64,17 +66,20 @@ export class SubscriptionsController {
     );
   }
 
+  // Unauthenticated by necessity (a website visitor isn't logged in to
+  // anything) — throttled so it can't be used to enumerate real customers'
+  // phone numbers/emails/names at volume.
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Post('lookup-account')
-  lookupAccount(@Body() dto: { identifier: string }) {
+  lookupAccount(@Body() dto: LookupAccountDto) {
     return this.subscriptionsService.lookupWebAccount(dto.identifier);
   }
 
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Post('create-web-order')
-  createWebOrder(
-    @Body() dto: { identifier?: string; phone?: string; tier: any; teamEnabled?: boolean },
-  ) {
+  createWebOrder(@Body() dto: CreateWebOrderDto) {
     return this.subscriptionsService.createWebOrder(
-      dto.identifier || dto.phone || '',
+      dto.identifier,
       dto.tier,
       dto.teamEnabled,
     );

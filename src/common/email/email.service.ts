@@ -22,6 +22,23 @@ export class EmailService {
     });
   }
 
+  async sendSignupVerificationOtp(to: string, code: string): Promise<void> {
+    try {
+      await this.transporter.sendMail({
+        from: this.from,
+        to,
+        subject: `${code} is your Agla Kaam email verification code`,
+        text: `Your email verification code for Agla Kaam is ${code}. It expires in 15 minutes.`,
+        html: `<p>Welcome to Agla Kaam!</p><p>Your email verification code is <strong style="font-size:24px;letter-spacing:3px;color:#2563eb">${code}</strong>.</p><p>It expires in 15 minutes. Enter this code in the app to complete your account setup.</p>`,
+      });
+    } catch (err) {
+      this.logger.error(
+        `Failed to send signup verification email to ${to}`,
+        err as Error,
+      );
+    }
+  }
+
   async sendPasswordResetCode(to: string, code: string): Promise<void> {
     try {
       await this.transporter.sendMail({

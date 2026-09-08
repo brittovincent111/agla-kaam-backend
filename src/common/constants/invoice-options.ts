@@ -26,6 +26,16 @@ export const PAYMENT_METHODS = [
 
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
 
+// Print-ready names — 'bank_transfer' is not something to show a customer.
+export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
+  cash: 'Cash',
+  upi: 'UPI',
+  bank_transfer: 'Bank Transfer',
+  card: 'Card',
+  cheque: 'Cheque',
+  other: 'Other',
+};
+
 export interface InvoiceItemInput {
   quantity: number;
   rate: number;

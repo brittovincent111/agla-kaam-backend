@@ -8,6 +8,7 @@ import { CustomersService } from '../customers/customers.service';
 import { ServicesService } from '../services/services.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { InvoicingService } from '../invoicing/invoicing.service';
+import { BusinessesService } from '../businesses/businesses.service';
 import { InvoiceDocument } from '../invoicing/schemas/invoice.schema';
 import { calculateInvoiceTotals } from '../common/constants/invoice-options';
 import { FREE_TIER_QUOTATION_LIMIT, tierHasInvoicing } from '../common/constants/subscription-options';
@@ -28,6 +29,7 @@ export class QuotationsService {
     private readonly servicesService: ServicesService,
     private readonly subscriptionsService: SubscriptionsService,
     private readonly invoicingService: InvoicingService,
+    private readonly businessesService: BusinessesService,
   ) {}
 
   private async nextQuotationNumber(businessId: string): Promise<string> {
@@ -78,6 +80,11 @@ export class QuotationsService {
 
     await this.customersService.findOne(businessId, dto.customerId);
 
+    // Snapshotted onto the quotation below — same reasoning as Invoice's
+    // currency/taxType — so it keeps showing what was actually quoted even
+    // if the business's currency/tax setup changes later.
+    const business = await this.businessesService.findById(businessId);
+
     const items = await this.buildItems(businessId, dto.customerId, dto.items);
     const totals = calculateInvoiceTotals(items, dto.discount ?? 0);
     const quotationDate = dto.quotationDate ? new Date(dto.quotationDate) : new Date();
@@ -91,6 +98,8 @@ export class QuotationsService {
       quotationDate,
       validUntil,
       status: 'draft',
+      currency: business.currency || 'INR',
+      taxType: business.taxType || 'gst',
       items,
       subtotal: totals.subtotal,
       discount: totals.discount,
@@ -236,6 +245,16 @@ export class QuotationsService {
         taxRate: item.taxRate,
       })),
     });
+
+    // invoicingService.create() stamps the invoice with the business's
+    // *current* currency/taxType — but this quotation may have been quoted
+    // under different settings (they're editable any time). The invoice
+    // must honor what was actually quoted, not silently switch.
+    if (invoice.currency !== quotation.currency || invoice.taxType !== quotation.taxType) {
+      invoice.currency = quotation.currency;
+      invoice.taxType = quotation.taxType;
+      await invoice.save();
+    }
 
     quotation.status = 'converted';
     quotation.convertedInvoiceId = invoice._id as Types.ObjectId;

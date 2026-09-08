@@ -4,6 +4,7 @@ import {
   Injectable,
   InternalServerErrorException,
   Logger,
+  NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
@@ -37,9 +38,10 @@ import { BusinessesService } from '../businesses/businesses.service';
 import {
   SubscriptionTier,
   SUBSCRIPTION_PRODUCT_IDS,
-  getPlanAmountRupees,
+  getPlanPricing,
   tierAllowsTeam,
 } from '../common/constants/subscription-options';
+import { geoDefaultsForCountry } from '../common/utils/geo-defaults';
 
 export interface CreatedOrder {
   orderId: string;
@@ -138,15 +140,24 @@ export class SubscriptionsService {
   }
 
   // Creates a Razorpay order for the chosen plan. The amount is always
-  // computed here from the tier — never accepted from the client — so
-  // nothing the mobile app sends can change what gets charged.
+  // computed here from the tier and the business's own country — never
+  // accepted from the client — so nothing the app or website sends can
+  // change what gets charged. Currency deliberately does NOT come from
+  // `business.currency`: that field is user-editable at any time (it's also
+  // what invoices are printed in), so treating it as authoritative for
+  // billing would let a subscription's price be picked by whoever fills in a
+  // Settings form. `business.country` is the one field that's locked once a
+  // subscription is active (see BusinessesService.update).
   async createOrder(
     businessId: string,
     tier: SubscriptionTier,
     teamEnabled = false,
   ): Promise<CreatedOrder> {
+    const business = await this.businessesService.findById(businessId);
+    const currency = geoDefaultsForCountry(business?.country).currency;
     const effectiveTeamEnabled = tierAllowsTeam(tier) && teamEnabled;
-    const amountPaise = getPlanAmountRupees(tier, effectiveTeamEnabled) * 100;
+    const plan = getPlanPricing(tier, effectiveTeamEnabled, currency);
+    const amountSubunits = plan.amount * 100;
     const keyId = this.configService.get<string>('RAZORPAY_KEY_ID');
     if (!keyId) {
       throw new InternalServerErrorException(
@@ -178,12 +189,12 @@ export class SubscriptionsService {
 
     const client = this.getRazorpayClient();
     console.log(
-      `[createOrder] businessId=${businessId} tier=${tier} teamEnabled=${effectiveTeamEnabled} amountPaise=${amountPaise}`,
+      `[createOrder] businessId=${businessId} tier=${tier} teamEnabled=${effectiveTeamEnabled} amountSubunits=${amountSubunits} currency=${plan.currency}`,
     );
     const order = await client.orders
       .create({
-        amount: amountPaise,
-        currency: 'INR',
+        amount: amountSubunits,
+        currency: plan.currency,
         notes: {
           businessId,
           tier,
@@ -200,14 +211,14 @@ export class SubscriptionsService {
       tier,
       teamEnabled: effectiveTeamEnabled,
       razorpayOrderId: order.id,
-      amount: amountPaise,
+      amount: amountSubunits,
       currency: order.currency,
       status: 'created',
     });
 
     return {
       orderId: order.id,
-      amount: amountPaise,
+      amount: amountSubunits,
       currency: order.currency,
       keyId,
     };
@@ -228,46 +239,31 @@ export class SubscriptionsService {
       phone: business.phone,
       email: business.email,
       tradeType: business.tradeType,
+      country: business.country,
+      currency: business.currency || 'INR',
     };
   }
 
-  // Creates a web order looked up by technician's phone number or email address
+  // Creates a web order looked up by technician's phone number or email
+  // address. A matching business is required — this used to fall through to
+  // creating a Razorpay order with no PaymentOrder row at all when nothing
+  // matched, which meant a successful payment had no record to activate:
+  // handleRazorpayWebhook would find no PaymentOrder for that Razorpay order
+  // id and silently drop it, taking the customer's money with no way to
+  // credit any account. Refusing up front means the visitor is told to
+  // create an account first, instead of paying into the void.
   async createWebOrder(
     identifier: string,
     tier: SubscriptionTier,
     teamEnabled = false,
   ): Promise<CreatedOrder> {
     const business = await this.businessesService.findByPhoneOrEmail(identifier);
-    if (business) {
-      return this.createOrder(business._id.toString(), tier, teamEnabled);
-    }
-
-    const effectiveTeamEnabled = tierAllowsTeam(tier) && teamEnabled;
-    const amountPaise = getPlanAmountRupees(tier, effectiveTeamEnabled) * 100;
-    const keyId = this.configService.get<string>('RAZORPAY_KEY_ID');
-    if (!keyId) {
-      throw new InternalServerErrorException(
-        'Razorpay is not configured on this server.',
+    if (!business) {
+      throw new NotFoundException(
+        "We couldn't find an Agla Kaam account with that phone number or email. Download the app and create an account first, then come back here to subscribe.",
       );
     }
-
-    const client = this.getRazorpayClient();
-    const order = await client.orders.create({
-      amount: amountPaise,
-      currency: 'INR',
-      notes: {
-        identifier,
-        tier,
-        teamEnabled: String(effectiveTeamEnabled),
-      },
-    });
-
-    return {
-      orderId: order.id,
-      amount: amountPaise,
-      currency: order.currency,
-      keyId,
-    };
+    return this.createOrder(business._id.toString(), tier, teamEnabled);
   }
 
   // Razorpay is the only thing that can activate a real subscription: the

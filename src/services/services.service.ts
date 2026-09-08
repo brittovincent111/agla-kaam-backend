@@ -17,6 +17,9 @@ import {
   resolveWarrantyExpiry,
 } from '../common/constants/service-options';
 
+import { AmcService } from '../amc/amc.service';
+import { S3Service } from '../common/s3/s3.service';
+
 @Injectable()
 export class ServicesService {
   constructor(
@@ -25,6 +28,9 @@ export class ServicesService {
     @Inject(forwardRef(() => CustomersService))
     private readonly customersService: CustomersService,
     private readonly teamMembersService: TeamMembersService,
+    @Inject(forwardRef(() => AmcService))
+    private readonly amcService: AmcService,
+    private readonly s3Service: S3Service,
   ) {}
 
   async create(
@@ -57,11 +63,6 @@ export class ServicesService {
       await this.customersService.setDefaultLocation(businessId, dto.customerId, location);
     }
 
-    // A technician's own log is always attributed to themselves — not
-    // client-controlled, so there's no way to log a visit under someone
-    // else's name. Only the owner can set this to hand a specific visit to a
-    // technician other than the customer's default (or leave it unset, which
-    // means "follow the customer's default").
     let assignedTechnicianId: string | undefined;
     if (viewer.role === 'technician') {
       assignedTechnicianId = viewer.teamMemberId;
@@ -70,11 +71,16 @@ export class ServicesService {
       assignedTechnicianId = dto.assignedTechnicianId;
     }
 
-    return this.serviceModel.create({
+    const status = dto.status ?? 'pending';
+    const completedAt = status === 'completed' ? new Date() : undefined;
+
+    const createdService = await this.serviceModel.create({
       businessId,
       customerId: dto.customerId,
       serviceType: dto.serviceType,
+      status,
       serviceDate,
+      completedAt,
       warrantyPeriod: dto.warrantyPeriod,
       warrantyExpiry,
       nextServiceInterval: dto.nextServiceInterval,
@@ -82,7 +88,63 @@ export class ServicesService {
       notes: dto.notes,
       location,
       assignedTechnicianId,
+      amcId: dto.amcId,
     });
+
+    if (dto.amcId) {
+      await this.amcService.logVisit(
+        businessId,
+        dto.amcId,
+        createdService._id.toString(),
+      );
+    }
+
+    return createdService;
+  }
+
+  async completeService(
+    businessId: string,
+    serviceId: string,
+    viewer: AuthenticatedBusiness,
+  ): Promise<ServiceDocument> {
+    const service = await this.findOne(businessId, serviceId, viewer);
+    service.status = 'completed';
+    service.completedAt = new Date();
+    const saved = await service.save();
+
+    if (service.amcId) {
+      await this.amcService.logVisit(
+        businessId,
+        service.amcId.toString(),
+        service._id.toString(),
+      );
+    }
+
+    return saved;
+  }
+
+  async revisitService(
+    businessId: string,
+    serviceId: string,
+    revisitDateStr: string,
+    viewer: AuthenticatedBusiness,
+  ): Promise<ServiceDocument> {
+    const service = await this.findOne(businessId, serviceId, viewer);
+    const revisitDate = new Date(revisitDateStr);
+    service.revisitDate = revisitDate;
+    service.nextServiceDate = revisitDate;
+    service.status = 'pending';
+    return service.save();
+  }
+
+  async cancelService(
+    businessId: string,
+    serviceId: string,
+    viewer: AuthenticatedBusiness,
+  ): Promise<ServiceDocument> {
+    const service = await this.findOne(businessId, serviceId, viewer);
+    service.status = 'cancelled';
+    return service.save();
   }
 
   async findOne(
@@ -156,11 +218,26 @@ export class ServicesService {
       .exec();
   }
 
-  // Sorted soonest-due first — this is the "what's coming up" view, not a
-  // historical log, since tracking upcoming service is the app's core purpose.
-  async findAllForBusiness(businessId: string, viewer?: AuthenticatedBusiness): Promise<ServiceDocument[]> {
+  async findAllForBusiness(
+    businessId: string,
+    viewer?: AuthenticatedBusiness,
+    statusFilter?: string,
+  ): Promise<ServiceDocument[]> {
+    await this.amcService.syncAmcServices(businessId);
+    const query: Record<string, unknown> = {
+      businessId,
+      ...(await this.technicianServiceFilter(businessId, viewer)),
+    };
+
+    if (statusFilter && statusFilter !== 'all') {
+      query.status = statusFilter;
+    } else {
+      // Never return cancelled services in main list by default
+      query.status = { $ne: 'cancelled' };
+    }
+
     return this.serviceModel
-      .find({ businessId, ...(await this.technicianServiceFilter(businessId, viewer)) })
+      .find(query)
       .sort({ nextServiceDate: 1 })
       .populate('customerId')
       .populate('assignedTechnicianId', 'name')
@@ -215,6 +292,7 @@ export class ServicesService {
     to: Date,
     viewer?: AuthenticatedBusiness,
   ): Promise<ServiceDocument[]> {
+    await this.amcService.syncAmcServices(businessId);
     return this.serviceModel
       .find({ businessId, nextServiceDate: { $gte: from, $lt: to }, ...(await this.technicianServiceFilter(businessId, viewer)) })
       .sort({ nextServiceDate: 1 })
@@ -224,6 +302,7 @@ export class ServicesService {
   }
 
   async findOverdue(businessId: string, before: Date, viewer?: AuthenticatedBusiness): Promise<ServiceDocument[]> {
+    await this.amcService.syncAmcServices(businessId);
     return this.serviceModel
       .find({ businessId, nextServiceDate: { $lt: before }, ...(await this.technicianServiceFilter(businessId, viewer)) })
       .sort({ nextServiceDate: 1 })
@@ -248,4 +327,123 @@ export class ServicesService {
       .populate('assignedTechnicianId', 'name')
       .exec();
   }
+
+  async uploadPhoto(
+    businessId: string,
+    serviceId: string,
+    kind: 'before' | 'after',
+    buffer: Buffer,
+    contentType: string,
+    viewer?: AuthenticatedBusiness,
+  ): Promise<void> {
+    const service = await this.findOne(businessId, serviceId, viewer);
+    const key = `businesses/${businessId}/services/${serviceId}/${kind}.${contentType.includes('png') ? 'png' : 'jpg'}`;
+    await this.s3Service.upload(key, buffer, contentType);
+    if (kind === 'before') {
+      service.beforePhotoKey = key;
+      service.beforePhotoContentType = contentType;
+      service.hasBeforePhoto = true;
+    } else {
+      service.afterPhotoKey = key;
+      service.afterPhotoContentType = contentType;
+      service.hasAfterPhoto = true;
+    }
+    await service.save();
+  }
+
+  async getPhoto(
+    businessId: string,
+    serviceId: string,
+    kind: 'before' | 'after',
+    viewer?: AuthenticatedBusiness,
+  ): Promise<{ data: Buffer; contentType: string } | null> {
+    const service = await this.serviceModel
+      .findOne({
+        _id: serviceId,
+        businessId,
+        ...(await this.technicianServiceFilter(businessId, viewer)),
+      })
+      .select('+beforePhotoKey +beforePhotoContentType +afterPhotoKey +afterPhotoContentType')
+      .exec();
+
+    if (!service) throw new NotFoundException('Service not found');
+
+    const key = kind === 'before' ? service.beforePhotoKey : service.afterPhotoKey;
+    const contentType = kind === 'before' ? service.beforePhotoContentType : service.afterPhotoContentType;
+
+    if (!key) return null;
+    const data = await this.s3Service.download(key);
+    if (!data) return null;
+    return { data, contentType: contentType ?? 'image/jpeg' };
+  }
+
+  async deletePhoto(
+    businessId: string,
+    serviceId: string,
+    kind: 'before' | 'after',
+    viewer?: AuthenticatedBusiness,
+  ): Promise<void> {
+    const service = await this.serviceModel
+      .findOne({
+        _id: serviceId,
+        businessId,
+        ...(await this.technicianServiceFilter(businessId, viewer)),
+      })
+      .select('+beforePhotoKey +afterPhotoKey')
+      .exec();
+
+    if (!service) throw new NotFoundException('Service not found');
+
+    const key = kind === 'before' ? service.beforePhotoKey : service.afterPhotoKey;
+    if (key) await this.s3Service.delete(key);
+
+    if (kind === 'before') {
+      service.beforePhotoKey = undefined;
+      service.beforePhotoContentType = undefined;
+      service.hasBeforePhoto = false;
+    } else {
+      service.afterPhotoKey = undefined;
+      service.afterPhotoContentType = undefined;
+      service.hasAfterPhoto = false;
+    }
+    await service.save();
+  }
+
+  async uploadSignature(
+    businessId: string,
+    serviceId: string,
+    buffer: Buffer,
+    contentType: string,
+    viewer?: AuthenticatedBusiness,
+  ): Promise<void> {
+    const service = await this.findOne(businessId, serviceId, viewer);
+    const key = `businesses/${businessId}/services/${serviceId}/signature.png`;
+    await this.s3Service.upload(key, buffer, contentType);
+    service.signatureKey = key;
+    service.signatureContentType = contentType;
+    service.hasSignature = true;
+    service.signedAt = new Date();
+    await service.save();
+  }
+
+  async getSignature(
+    businessId: string,
+    serviceId: string,
+    viewer?: AuthenticatedBusiness,
+  ): Promise<{ data: Buffer; contentType: string } | null> {
+    const service = await this.serviceModel
+      .findOne({
+        _id: serviceId,
+        businessId,
+        ...(await this.technicianServiceFilter(businessId, viewer)),
+      })
+      .select('+signatureKey +signatureContentType')
+      .exec();
+
+    if (!service || !service.signatureKey) return null;
+    const data = await this.s3Service.download(service.signatureKey);
+    if (!data) return null;
+    return { data, contentType: service.signatureContentType ?? 'image/png' };
+  }
 }
+

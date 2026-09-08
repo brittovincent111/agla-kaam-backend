@@ -9,11 +9,15 @@ import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { randomInt } from 'crypto';
 import { OAuth2Client } from 'google-auth-library';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+import { SignupOtp, SignupOtpDocument } from './schemas/signup-otp.schema';
 import { BusinessesService } from '../businesses/businesses.service';
 import { ServicePresetsService } from '../service-presets/service-presets.service';
 import { TeamMembersService } from '../team-members/team-members.service';
 import { EmailService } from '../common/email/email.service';
 import { BusinessDocument } from '../businesses/schemas/business.schema';
+import { TeamMemberDocument } from '../team-members/schemas/team-member.schema';
 
 const PASSWORD_SALT_ROUNDS = 10;
 const RESET_CODE_TTL_MINUTES = 15;
@@ -23,6 +27,8 @@ const APPLE_JWKS_URL = 'https://appleid.apple.com/auth/keys';
 @Injectable()
 export class AuthService {
   constructor(
+    @InjectModel(SignupOtp.name)
+    private readonly signupOtpModel: Model<SignupOtpDocument>,
     private readonly businessesService: BusinessesService,
     private readonly servicePresetsService: ServicePresetsService,
     private readonly teamMembersService: TeamMembersService,
@@ -31,28 +37,91 @@ export class AuthService {
     private readonly configService: ConfigService,
   ) {}
 
+  async sendSignupOtp(email: string): Promise<{ devCode?: string }> {
+    const normalizedEmail = email.toLowerCase();
+    const existingBusiness = await this.businessesService.findByEmail(normalizedEmail);
+    if (existingBusiness) {
+      throw new ConflictException('An account with this email already exists.');
+    }
+    const existingMember = await this.teamMembersService.findByEmail(normalizedEmail);
+    if (existingMember) {
+      throw new ConflictException('This email is already registered as a team member.');
+    }
+
+    const code = String(randomInt(100000, 1000000));
+    const codeHash = await bcrypt.hash(code, PASSWORD_SALT_ROUNDS);
+    const expiresAt = new Date(Date.now() + RESET_CODE_TTL_MINUTES * 60 * 1000);
+
+    await this.signupOtpModel.deleteMany({ email: normalizedEmail }).exec();
+    await this.signupOtpModel.create({
+      email: normalizedEmail,
+      codeHash,
+      expiresAt,
+    });
+
+    await this.emailService.sendSignupVerificationOtp(normalizedEmail, code);
+
+    const isProd = this.configService.get('NODE_ENV') === 'production';
+    return isProd ? {} : { devCode: code };
+  }
+
   async registerWithEmail(
     email: string,
     password: string,
     businessName?: string,
     phone?: string,
+    code?: string,
   ) {
     const normalizedEmail = email.toLowerCase();
+
+    if (code) {
+      const otpRecord = await this.signupOtpModel
+        .findOne({ email: normalizedEmail })
+        .exec();
+      const isValid =
+        otpRecord &&
+        otpRecord.expiresAt.getTime() > Date.now() &&
+        (await bcrypt.compare(code, otpRecord.codeHash));
+
+      if (!isValid) {
+        throw new UnauthorizedException('Invalid or expired verification code');
+      }
+      await this.signupOtpModel.deleteMany({ email: normalizedEmail }).exec();
+    }
+
     const existing = await this.businessesService.findByEmail(normalizedEmail);
     if (existing) {
       throw new ConflictException('An account with this email already exists.');
     }
 
     const passwordHash = await bcrypt.hash(password, PASSWORD_SALT_ROUNDS);
-    const business = await this.businessesService.createWithEmail({
-      email: normalizedEmail,
-      passwordHash,
-      name: businessName,
-      phone,
-    });
-    await this.servicePresetsService.seedDefaults(business.id);
+    try {
+      const business = await this.businessesService.createWithEmail({
+        email: normalizedEmail,
+        passwordHash,
+        name: businessName,
+        phone,
+      });
+      await this.servicePresetsService.seedDefaults(business.id);
 
-    return this.issueOwnerToken(business);
+      return this.issueOwnerToken(business);
+    } catch (err: any) {
+      if (err.code === 11000 || err.name === 'MongoServerError') {
+        if (
+          err.keyPattern?.phone ||
+          err.errmsg?.includes('phone') ||
+          err.message?.includes('phone')
+        ) {
+          throw new ConflictException(
+            'An account with this phone number already exists.',
+          );
+        }
+        throw new ConflictException(
+          'An account with this email or phone already exists.',
+        );
+      }
+      throw err;
+    }
   }
 
   async loginWithEmail(email: string, password: string) {
@@ -76,25 +145,7 @@ export class AuthService {
       teamMember?.passwordHash &&
       (await bcrypt.compare(password, teamMember.passwordHash))
     ) {
-      if (!teamMember.active) {
-        throw new UnauthorizedException(
-          'This team member account has been deactivated.',
-        );
-      }
-      const teamBusiness = await this.businessesService.findById(
-        teamMember.businessId.toString(),
-      );
-      const accessToken = await this.jwtService.signAsync({
-        sub: teamBusiness.id,
-        email: teamMember.email,
-        role: 'technician',
-        teamMemberId: teamMember.id,
-      });
-      return {
-        accessToken,
-        business: teamBusiness,
-        role: 'technician' as const,
-      };
+      return this.issueTechnicianToken(teamMember);
     }
 
     throw new UnauthorizedException('Invalid email or password');
@@ -179,6 +230,17 @@ export class AuthService {
 
     let business = await this.businessesService.findByGoogleId(googleId);
     if (!business) {
+      // A technician's email lives on a TeamMember, not a Business. Without
+      // this the lookups below find nothing and a second, empty business gets
+      // created — leaving the technician the owner of an account with none of
+      // their employer's customers in it.
+      const technician = await this.resolveTechnicianSignIn(
+        'googleId',
+        googleId,
+        email,
+      );
+      if (technician) return technician;
+
       // Same email already has a phone/email account — link Google to it
       // rather than creating a second business for the same person.
       const existingByEmail = await this.businessesService.findByEmail(email);
@@ -243,6 +305,15 @@ export class AuthService {
 
     let business = await this.businessesService.findByAppleId(appleId);
     if (!business) {
+      // Same reason as loginWithGoogle: a technician must resolve to their
+      // employer's business, not a fresh empty one.
+      const technician = await this.resolveTechnicianSignIn(
+        'appleId',
+        appleId,
+        email,
+      );
+      if (technician) return technician;
+
       const existingByEmail = email
         ? await this.businessesService.findByEmail(email)
         : null;
@@ -281,6 +352,64 @@ export class AuthService {
       this.appleJWKS = createRemoteJWKSet(new URL(APPLE_JWKS_URL));
     }
     return this.appleJWKS;
+  }
+
+  // A technician's token names the business they work for as `sub`, so every
+  // downstream query scopes to that business, with role/teamMemberId marking
+  // who is acting. Shared by the password and social sign-in paths.
+  private async issueTechnicianToken(teamMember: TeamMemberDocument) {
+    if (!teamMember.active) {
+      throw new UnauthorizedException(
+        'This team member account has been deactivated.',
+      );
+    }
+    const business = await this.businessesService.findById(
+      teamMember.businessId.toString(),
+    );
+    const accessToken = await this.jwtService.signAsync({
+      sub: business.id,
+      email: teamMember.email,
+      role: 'technician',
+      teamMemberId: teamMember.id,
+    });
+    return { accessToken, business, role: 'technician' as const };
+  }
+
+  // Google/Apple sign-in for a technician. Emails are globally unique across
+  // businesses and team members (enforced when a member is created), so at
+  // most one of these lookups can match — the provider id finds a returning
+  // technician, the email finds one signing in socially for the first time.
+  private async resolveTechnicianSignIn(
+    provider: 'googleId' | 'appleId',
+    providerId: string,
+    email: string | null,
+  ) {
+    const byProvider =
+      provider === 'googleId'
+        ? await this.teamMembersService.findByGoogleId(providerId)
+        : await this.teamMembersService.findByAppleId(providerId);
+    if (byProvider) {
+      return this.issueTechnicianToken(byProvider);
+    }
+
+    const byEmail = email
+      ? await this.teamMembersService.findByEmail(email)
+      : null;
+    if (!byEmail) return null;
+
+    // Check the account is usable before writing the link, so a deactivated
+    // member doesn't quietly get a provider id attached.
+    if (!byEmail.active) {
+      throw new UnauthorizedException(
+        'This team member account has been deactivated.',
+      );
+    }
+    await this.teamMembersService.linkProviderId(
+      byEmail.id,
+      provider,
+      providerId,
+    );
+    return this.issueTechnicianToken(byEmail);
   }
 
   private async issueOwnerToken(business: BusinessDocument) {

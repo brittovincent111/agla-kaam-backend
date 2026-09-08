@@ -21,4 +21,10 @@ export class RegisterEmailDto {
   @IsString()
   @MaxLength(20)
   phone?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(4)
+  @MaxLength(10)
+  code?: string;
 }

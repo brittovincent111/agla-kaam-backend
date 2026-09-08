@@ -11,6 +11,21 @@ import { Quotation } from '../quotations/schemas/quotation.schema';
 // this did before) meant the preview never demonstrated that part of the
 // layout at all, even though real invoices/quotations with a customer that
 // has these set render correctly.
+// Mirrors what InvoicePdfService resolves from real linked Service records,
+// so the Compact preview demonstrates its technician/service-dates row
+// instead of rendering as if the invoice had no service attached.
+export const SAMPLE_SERVICE_CONTEXT = {
+  technicianName: 'Arun Kumar',
+  serviceDate: new Date(),
+  nextServiceDate: (() => {
+    const next = new Date();
+    next.setMonth(next.getMonth() + 6);
+    return next;
+  })(),
+  jobReference: '#4A7F21',
+  serviceNotes: 'Outdoor coil cleaned; cooling checked after gas top-up.',
+};
+
 export const SAMPLE_CUSTOMER = {
   name: 'Ravi Kumar',
   phone: '+91 98765 43210',

@@ -32,8 +32,22 @@ export class Service {
   @Prop({ required: true, trim: true })
   serviceType: string;
 
+  @Prop({
+    required: true,
+    enum: ['pending', 'completed', 'cancelled'],
+    default: 'pending',
+    index: true,
+  })
+  status: 'pending' | 'completed' | 'cancelled';
+
   @Prop({ required: true })
   serviceDate: Date;
+
+  @Prop()
+  completedAt?: Date;
+
+  @Prop()
+  revisitDate?: Date;
 
   @Prop({ required: true, enum: WARRANTY_PERIODS, default: 'none' })
   warrantyPeriod: string;
@@ -62,6 +76,39 @@ export class Service {
   // attribution record of who actually did it.
   @Prop({ type: Types.ObjectId, ref: 'TeamMember', index: true })
   assignedTechnicianId?: Types.ObjectId;
+
+  @Prop({ type: Types.ObjectId, ref: 'Amc', index: true })
+  amcId?: Types.ObjectId;
+
+  @Prop({ select: false })
+  beforePhotoKey?: string;
+
+  @Prop({ select: false })
+  beforePhotoContentType?: string;
+
+  @Prop({ default: false })
+  hasBeforePhoto: boolean;
+
+  @Prop({ select: false })
+  afterPhotoKey?: string;
+
+  @Prop({ select: false })
+  afterPhotoContentType?: string;
+
+  @Prop({ default: false })
+  hasAfterPhoto: boolean;
+
+  @Prop({ select: false })
+  signatureKey?: string;
+
+  @Prop({ select: false })
+  signatureContentType?: string;
+
+  @Prop({ default: false })
+  hasSignature: boolean;
+
+  @Prop()
+  signedAt?: Date;
 }
 
 export const ServiceSchema = SchemaFactory.createForClass(Service);

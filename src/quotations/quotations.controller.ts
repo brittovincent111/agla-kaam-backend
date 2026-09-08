@@ -11,6 +11,7 @@ import { UpdateQuotationDto } from './dto/update-quotation.dto';
 import { BusinessesService } from '../businesses/businesses.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import {
+  isCustomAccentUnlocked,
   DEFAULT_DOCUMENT_TEMPLATE_ID,
   isDocumentTemplateUnlocked,
 } from '../common/pdf/document-templates';
@@ -90,7 +91,15 @@ export class QuotationsController {
     const templateId = isDocumentTemplateUnlocked(biz.invoiceTemplateId, tier)
       ? biz.invoiceTemplateId
       : DEFAULT_DOCUMENT_TEMPLATE_ID;
-    const buffer = await this.quotationPdfService.generate(business.businessId, quotation, templateId);
+    const accentColor = isCustomAccentUnlocked(tier)
+      ? biz.documentAccentColor ?? null
+      : null;
+    const buffer = await this.quotationPdfService.generate(
+      business.businessId,
+      quotation,
+      templateId,
+      accentColor,
+    );
     res.set({
       'Content-Type': 'application/pdf',
       'Content-Disposition': `attachment; filename="${quotation.quotationNumber}.pdf"`,

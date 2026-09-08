@@ -44,6 +44,8 @@ import { ServicePresetsService } from '../service-presets/service-presets.servic
 import { UpdateBusinessDto } from './dto/update-business.dto';
 import { DocumentTemplateId } from '../common/pdf/document-templates';
 import { S3Service } from '../common/s3/s3.service';
+import { inferBusinessGeoDefaults } from '../common/utils/geo-defaults';
+import { splitClearableUpdate } from '../common/utils/clearable-update';
 
 export interface BusinessWithBranding {
   name: string;
@@ -51,8 +53,21 @@ export interface BusinessWithBranding {
   phone?: string;
   email?: string;
   gstin?: string;
+  country?: string;
+  currency?: string;
+  taxType?: string;
+  taxRegistrationNumber?: string;
   logo?: Buffer;
   signature?: Buffer;
+  // Carried through so a PDF render can resolve the document theme without a
+  // second fetch of the business.
+  documentAccentColor?: string;
+  paymentUpiId?: string;
+  paymentBankName?: string;
+  paymentAccountNumber?: string;
+  paymentAccountCode?: string;
+  acceptsCash?: boolean;
+  showPaymentDetailsOnInvoice?: boolean;
 }
 
 const IMAGE_EXTENSIONS: Record<string, string> = {
@@ -180,11 +195,16 @@ export class BusinessesService implements OnModuleInit {
     name?: string;
     phone?: string;
   }): Promise<BusinessDocument> {
+    const geo = inferBusinessGeoDefaults(params.phone);
     return this.businessModel.create({
       email: params.email.toLowerCase(),
       passwordHash: params.passwordHash,
       ...(params.name ? { name: params.name } : {}),
       ...(params.phone ? { phone: params.phone } : {}),
+      country: geo.country,
+      currency: geo.currency,
+      timezone: geo.timezone,
+      taxType: geo.taxType,
     });
   }
 
@@ -192,11 +212,18 @@ export class BusinessesService implements OnModuleInit {
     email: string;
     googleId: string;
     name?: string;
+    phone?: string;
   }): Promise<BusinessDocument> {
+    const geo = inferBusinessGeoDefaults(params.phone);
     return this.businessModel.create({
       email: params.email.toLowerCase(),
       googleId: params.googleId,
       ...(params.name ? { name: params.name } : {}),
+      ...(params.phone ? { phone: params.phone } : {}),
+      country: geo.country,
+      currency: geo.currency,
+      timezone: geo.timezone,
+      taxType: geo.taxType,
     });
   }
 
@@ -216,11 +243,18 @@ export class BusinessesService implements OnModuleInit {
     email: string;
     appleId: string;
     name?: string;
+    phone?: string;
   }): Promise<BusinessDocument> {
+    const geo = inferBusinessGeoDefaults(params.phone);
     return this.businessModel.create({
       email: params.email.toLowerCase(),
       appleId: params.appleId,
       ...(params.name ? { name: params.name } : {}),
+      ...(params.phone ? { phone: params.phone } : {}),
+      country: geo.country,
+      currency: geo.currency,
+      timezone: geo.timezone,
+      taxType: geo.taxType,
     });
   }
 
@@ -272,8 +306,19 @@ export class BusinessesService implements OnModuleInit {
       phone: business.phone,
       email: business.email,
       gstin: business.gstin,
+      country: business.country,
+      currency: business.currency,
+      taxType: business.taxType,
+      taxRegistrationNumber: business.taxRegistrationNumber,
       logo: logo ?? undefined,
       signature: signature ?? undefined,
+      documentAccentColor: business.documentAccentColor,
+      paymentUpiId: business.paymentUpiId,
+      paymentBankName: business.paymentBankName,
+      paymentAccountNumber: business.paymentAccountNumber,
+      paymentAccountCode: business.paymentAccountCode,
+      acceptsCash: business.acceptsCash,
+      showPaymentDetailsOnInvoice: business.showPaymentDetailsOnInvoice,
     };
   }
 
@@ -292,12 +337,34 @@ export class BusinessesService implements OnModuleInit {
     const before = await this.findById(id);
     const isFirstTradeSelection = !before.tradeType && !!dto.tradeType;
 
+    // Subscription pricing is derived from `country` (see
+    // SubscriptionsService.createOrder), so letting it change freely once a
+    // paid subscription exists would let a business flip to a cheaper
+    // country right before a renewal. Free-tier businesses (nothing
+    // financially at stake yet) can still correct a wrong auto-detected
+    // country at will.
+    if (dto.country && dto.country !== before.country) {
+      const activeSubscription = await this.subscriptionModel
+        .findOne({ businessId: id })
+        .sort({ createdAt: -1 })
+        .exec();
+      const isActive =
+        activeSubscription?.status === 'active' &&
+        (!activeSubscription.renewalDate ||
+          activeSubscription.renewalDate.getTime() >= Date.now());
+      if (isActive) {
+        throw new ConflictException(
+          'Your billing country cannot be changed while a subscription is active. Contact support if you need to change it.',
+        );
+      }
+    }
+
     // phone and email are both sparse-unique. Without this the index throws a
     // raw E11000 and the client gets a 500, where the real answer is "that
     // number already belongs to another account" — which is also the hint a
     // returning user needs when they've accidentally created a second account.
     const business = await this.businessModel
-      .findByIdAndUpdate(id, dto, { new: true })
+      .findByIdAndUpdate(id, splitClearableUpdate({ ...dto }), { new: true })
       .exec()
       .catch((err: { code?: number; keyPattern?: Record<string, unknown> }) => {
         if (err?.code === 11000) {
@@ -498,9 +565,29 @@ export class BusinessesService implements OnModuleInit {
   async setInvoiceTemplate(
     id: string,
     invoiceTemplateId: DocumentTemplateId,
+    // `undefined` leaves the stored accent alone (a template change on its
+    // own must not silently reset a chosen colour); `null` clears it back to
+    // the layout's default.
+    documentAccentColor?: string | null,
   ): Promise<BusinessDocument> {
+    const update: Record<string, unknown> = { invoiceTemplateId };
+    if (documentAccentColor !== undefined) {
+      if (documentAccentColor === null) {
+        update.$unset = { documentAccentColor: '' };
+      } else {
+        update.documentAccentColor = documentAccentColor;
+      }
+    }
+
+    // $unset can't sit alongside the same field in a $set-style update, so
+    // it's lifted out into its own operator when present.
+    const { $unset, ...set } = update as { $unset?: unknown };
     const business = await this.businessModel
-      .findByIdAndUpdate(id, { invoiceTemplateId }, { new: true })
+      .findByIdAndUpdate(
+        id,
+        $unset ? { $set: set, $unset } : { $set: set },
+        { new: true },
+      )
       .exec();
     if (!business) {
       throw new NotFoundException('Business not found');
@@ -510,5 +597,27 @@ export class BusinessesService implements OnModuleInit {
 
   async updatePushToken(id: string, pushToken: string): Promise<void> {
     await this.businessModel.findByIdAndUpdate(id, { pushToken }).exec();
+  }
+
+  // A technician's token lives on their TeamMember row, not the business —
+  // see the note on the push-token endpoint. Written through the directly
+  // registered model for the same reason the deletion cascade is: importing
+  // TeamMembersModule here would be circular.
+  async updateTeamMemberPushToken(
+    teamMemberId: string,
+    pushToken: string,
+  ): Promise<void> {
+    await this.teamMemberModel
+      .findByIdAndUpdate(teamMemberId, { pushToken })
+      .exec();
+  }
+
+  // Called when Expo reports a token no longer belongs to an installed app —
+  // otherwise a reinstalled or wiped device is pushed to forever.
+  async clearPushTokens(tokens: string[]): Promise<void> {
+    if (!tokens.length) return;
+    await this.businessModel
+      .updateMany({ pushToken: { $in: tokens } }, { $unset: { pushToken: '' } })
+      .exec();
   }
 }

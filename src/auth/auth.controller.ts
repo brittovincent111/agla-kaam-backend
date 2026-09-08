@@ -2,6 +2,7 @@ import { Body, Controller, HttpCode, Post } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { RegisterEmailDto } from './dto/register-email.dto';
+import { SendSignupOtpDto } from './dto/send-signup-otp.dto';
 import { LoginEmailDto } from './dto/login-email.dto';
 import { GoogleAuthDto } from './dto/google-auth.dto';
 import { AppleAuthDto } from './dto/apple-auth.dto';
@@ -11,6 +12,17 @@ import { ResetPasswordDto } from './dto/reset-password.dto';
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
+
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
+  @HttpCode(200)
+  @Post('send-signup-otp')
+  async sendSignupOtp(@Body() dto: SendSignupOtpDto) {
+    const { devCode } = await this.authService.sendSignupOtp(dto.email);
+    return {
+      message: 'Verification code sent to your email.',
+      ...(devCode ? { devCode } : {}),
+    };
+  }
 
   // Tighter than the app-wide default (60/min) — these are the
   // credential-guessing surface, so they get their own per-IP limit
@@ -23,6 +35,7 @@ export class AuthController {
       dto.password,
       dto.businessName,
       dto.phone,
+      dto.code,
     );
   }
 

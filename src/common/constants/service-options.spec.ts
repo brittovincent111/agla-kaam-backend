@@ -37,6 +37,10 @@ describe('resolveWarrantyExpiry', () => {
 describe('resolveNextServiceDate', () => {
   const serviceDate = new Date('2026-01-31T00:00:00.000Z');
 
+  it('returns serviceDate for "none"', () => {
+    expect(resolveNextServiceDate(serviceDate, 'none')).toEqual(serviceDate);
+  });
+
   it('adds 1 month for "1m"', () => {
     expect(resolveNextServiceDate(serviceDate, '1m')).toEqual(
       new Date('2026-03-03T00:00:00.000Z'),

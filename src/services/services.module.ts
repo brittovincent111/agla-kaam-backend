@@ -5,6 +5,8 @@ import { ServicesService } from './services.service';
 import { ServicesController } from './services.controller';
 import { CustomersModule } from '../customers/customers.module';
 import { TeamMembersModule } from '../team-members/team-members.module';
+import { AmcModule } from '../amc/amc.module';
+import { S3Service } from '../common/s3/s3.service';
 
 @Module({
   imports: [
@@ -14,9 +16,11 @@ import { TeamMembersModule } from '../team-members/team-members.module';
     // have a service reassigned to a given technician.
     forwardRef(() => CustomersModule),
     TeamMembersModule,
+    forwardRef(() => AmcModule),
   ],
   controllers: [ServicesController],
-  providers: [ServicesService],
+  providers: [ServicesService, S3Service],
   exports: [ServicesService],
 })
 export class ServicesModule {}
+

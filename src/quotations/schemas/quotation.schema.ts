@@ -25,6 +25,16 @@ export class Quotation {
   @Prop({ required: true, enum: QUOTATION_STATUSES, default: 'draft', index: true })
   status: QuotationStatus;
 
+  // Snapshotted from the business at creation time, same reasoning as
+  // Invoice.currency/taxType — a business's currency/tax setup can change
+  // later (it's an editable Settings field), and a quotation must keep
+  // showing what it actually quoted, not silently relabel itself.
+  @Prop({ required: true, default: 'INR', uppercase: true, trim: true })
+  currency: string;
+
+  @Prop({ required: true, default: 'gst', enum: ['gst', 'vat', 'sales_tax', 'none'] })
+  taxType: string;
+
   @Prop({ type: [QuotationItemSchema], default: [] })
   items: QuotationItem[];
 

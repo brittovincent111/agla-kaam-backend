@@ -47,6 +47,7 @@ export const WARRANTY_PERIODS = [
 export type WarrantyPeriod = (typeof WARRANTY_PERIODS)[number];
 
 export const NEXT_SERVICE_INTERVALS = [
+  'none',
   '1m',
   '3m',
   '6m',
@@ -100,6 +101,8 @@ export function resolveNextServiceDate(
   customDate?: Date,
 ): Date {
   switch (interval) {
+    case 'none':
+      return serviceDate;
     case '1m':
       return addMonths(serviceDate, 1);
     case '3m':

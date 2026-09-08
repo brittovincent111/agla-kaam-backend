@@ -26,6 +26,10 @@ export class CreateServiceDto {
   serviceType: string;
 
   @IsOptional()
+  @IsIn(['pending', 'completed', 'cancelled'])
+  status?: 'pending' | 'completed' | 'cancelled';
+
+  @IsOptional()
   @Type(() => Date)
   @IsDate()
   serviceDate?: Date;
@@ -63,4 +67,8 @@ export class CreateServiceDto {
   @IsOptional()
   @IsMongoId()
   assignedTechnicianId?: string;
+
+  @IsOptional()
+  @IsMongoId()
+  amcId?: string;
 }

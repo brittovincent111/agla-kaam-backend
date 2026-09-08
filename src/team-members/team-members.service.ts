@@ -12,6 +12,7 @@ import { CreateTeamMemberDto } from './dto/create-team-member.dto';
 import { BusinessesService } from '../businesses/businesses.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import {
+  FREE_TIER_TEAM_LIMIT,
   TEAM_SEAT_LIMIT,
   tierAllowsTeam,
 } from '../common/constants/subscription-options';
@@ -40,6 +41,27 @@ export class TeamMembersService {
       .exec();
   }
 
+  findByGoogleId(googleId: string): Promise<TeamMemberDocument | null> {
+    return this.teamMemberModel.findOne({ googleId }).exec();
+  }
+
+  findByAppleId(appleId: string): Promise<TeamMemberDocument | null> {
+    return this.teamMemberModel.findOne({ appleId }).exec();
+  }
+
+  // Attaches a verified provider id to an existing technician. Never creates
+  // one — a team member only ever exists because their owner added them, so a
+  // social sign-in can link to that record but must not invent it.
+  linkProviderId(
+    id: string,
+    provider: 'googleId' | 'appleId',
+    providerId: string,
+  ): Promise<TeamMemberDocument | null> {
+    return this.teamMemberModel
+      .findByIdAndUpdate(id, { [provider]: providerId }, { new: true })
+      .exec();
+  }
+
   findAllForBusiness(businessId: string): Promise<TeamMemberDocument[]> {
     return this.teamMemberModel
       .find({ businessId })
@@ -55,15 +77,20 @@ export class TeamMembersService {
     const tier = await this.subscriptionsService.getActiveTier(businessId);
     const teamEnabled =
       await this.subscriptionsService.hasActiveTeamAddon(businessId);
-    if (!tierAllowsTeam(tier) || !teamEnabled) {
-      throw new ForbiddenException(
-        'The Team add-on is not active on your plan. Upgrade to Combo + Team (₹1499/year) to add technicians.',
-      );
-    }
 
     const activeCount = await this.teamMemberModel
       .countDocuments({ businessId, active: true })
       .exec();
+
+    if (!tierAllowsTeam(tier) || !teamEnabled) {
+      if (activeCount >= FREE_TIER_TEAM_LIMIT) {
+        throw new ForbiddenException(
+          `Your plan includes ${FREE_TIER_TEAM_LIMIT} free technician seat to test team features. Upgrade to Combo + Team (₹1499/year) to add up to ${TEAM_SEAT_LIMIT} technicians.`,
+        );
+      }
+      return;
+    }
+
     if (activeCount >= TEAM_SEAT_LIMIT) {
       throw new ForbiddenException(
         `Your Team add-on is limited to ${TEAM_SEAT_LIMIT} members.`,
@@ -102,11 +129,6 @@ export class TeamMembersService {
         active: true,
       });
     } catch (err) {
-      // The findByEmail checks above aren't atomic with this insert — two
-      // near-simultaneous requests (e.g. a double-tapped submit button) can
-      // both pass the check and race to insert, so the unique index is the
-      // real guard. Translate its raw duplicate-key error into the same
-      // Conflict response the pre-check gives, instead of a raw 500.
       if ((err as { code?: number }).code === 11000) {
         throw new ConflictException(
           'This email is already a team member on another account.',
@@ -114,6 +136,26 @@ export class TeamMembersService {
       }
       throw err;
     }
+  }
+
+  async updatePushToken(teamMemberId: string, pushToken: string): Promise<void> {
+    await this.teamMemberModel
+      .findByIdAndUpdate(teamMemberId, { pushToken })
+      .exec();
+  }
+
+  async clearPushTokens(tokens: string[]): Promise<void> {
+    if (!tokens.length) return;
+    await this.teamMemberModel
+      .updateMany({ pushToken: { $in: tokens } }, { $unset: { pushToken: '' } })
+      .exec();
+  }
+
+  findNotifiableForBusiness(businessId: string) {
+    return this.teamMemberModel
+      .find({ businessId, active: true, pushToken: { $exists: true, $ne: '' } })
+      .select('_id name pushToken')
+      .exec();
   }
 
   async setActive(
@@ -129,9 +171,6 @@ export class TeamMembersService {
       throw new NotFoundException('Team member not found');
     }
 
-    // Only re-check on the false→true transition — deactivating never needs
-    // the seat/add-on guard, and re-checking on an already-active member
-    // would needlessly reject a no-op activate call.
     if (active && !member.active) {
       await this.assertSeatAvailable(businessId);
     }
@@ -140,10 +179,6 @@ export class TeamMembersService {
     return member.save();
   }
 
-  // Shared by anywhere a technician id arrives as raw client input
-  // (assigning a customer, overriding a service) — without this, any Mongo
-  // id was accepted with no check that it's actually an active technician of
-  // this business.
   async assertActiveMember(
     businessId: string,
     teamMemberId: string,
@@ -160,6 +195,7 @@ export class TeamMembersService {
       throw new NotFoundException('Technician not found');
     }
   }
+
 
   async resetPassword(
     businessId: string,
