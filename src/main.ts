@@ -3,6 +3,12 @@ if (!globalThis.crypto) {
   (globalThis as any).crypto = crypto.webcrypto || crypto;
 }
 
+// Must run before any module can issue an HTTP request. `fetch` is only a
+// global from Node 18 onward, and the deployed server is older — see
+// common/http/fetch-polyfill.ts.
+import { installFetchPolyfill } from './common/http/fetch-polyfill';
+installFetchPolyfill();
+
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -27,6 +33,19 @@ function logEnvPresence(configService: ConfigService) {
     'RAZORPAY_KEY_SECRET',
     'RAZORPAY_WEBHOOK_SECRET',
   ];
+  // Logged because a Node version mismatch is invisible until something
+  // fails at runtime: `fetch` is only global from Node 18, and running on 16
+  // silently broke the admin broadcast, the reminder push dispatch and Apple
+  // purchase verification. pm2 can also launch a different node than the
+  // login shell, so printing what the process itself is using is the only
+  // reliable answer.
+  console.log(`node: ${process.version} (${process.arch})`);
+  if (Number(process.versions.node.split('.')[0]) < 18) {
+    console.warn(
+      `WARNING: Node ${process.version} is below the required >=18. ` +
+        'A fetch polyfill is active, but upgrade the server.',
+    );
+  }
   console.log('--- env presence check ---');
   for (const key of keys) {
     console.log(
