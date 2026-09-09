@@ -2,9 +2,11 @@ import {
   IsBoolean,
   IsEmail,
   IsIn,
+  IsNumber,
   IsOptional,
   IsString,
   MaxLength,
+  Min,
 } from 'class-validator';
 import { KNOWN_COUNTRY_CODES } from '../../common/utils/geo-defaults';
 
@@ -95,6 +97,16 @@ export class UpdateBusinessDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(500)
+  paymentQrContent?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  bankDetails?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(100)
   paymentBankName?: string;
 
@@ -110,9 +122,175 @@ export class UpdateBusinessDto {
 
   @IsOptional()
   @IsBoolean()
-  acceptsCash?: boolean;
+  showPaymentDetailsOnInvoice?: boolean;
+
+  // Invoice Settings
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  invoicePrefix?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  invoiceNextSerial?: number;
 
   @IsOptional()
   @IsBoolean()
-  showPaymentDetailsOnInvoice?: boolean;
+  invoiceShowDiscount?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  invoiceShowTax?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  invoiceShowHsn?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  invoiceTopMessage?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  invoiceBottomMessage?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  invoiceShowBankInfo?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  invoiceShowUpiInfo?: boolean;
+
+  // Quotation Settings
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  quotationPrefix?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  quotationNextSerial?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  quotationShowTax?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  quotationShowHsn?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  quotationShowShippingAddress?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  quotationTopMessage?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  quotationBottomMessage?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  quotationShowBankInfo?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  quotationShowUpiInfo?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  quotationShowSignature?: boolean;
+
+  // Purchase Order / Purchase Settings
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  purchasePrefix?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  purchaseNextSerial?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  purchaseShowDiscount?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  purchaseShowTax?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  purchaseShowHsn?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  purchaseTopMessage?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  purchaseBottomMessage?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  purchaseShowBankInfo?: boolean;
+
+  // Proforma Invoice Settings
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  proformaPrefix?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  proformaNextSerial?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  proformaShowDiscount?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  proformaShowTax?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  proformaShowHsn?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  proformaTopMessage?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  proformaBottomMessage?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  proformaShowBankInfo?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  proformaShowUpiInfo?: boolean;
+
+  // Product Settings
+  @IsOptional()
+  @IsBoolean()
+  enableTaxInclusivePrice?: boolean;
 }
+

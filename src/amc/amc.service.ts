@@ -15,6 +15,20 @@ import { UpdateAmcDto } from './dto/update-amc.dto';
 import { CustomersService } from '../customers/customers.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { FREE_TIER_AMC_LIMIT } from '../common/constants/subscription-options';
+import {
+  Page,
+  andFilters,
+  buildPage,
+  clampLimit,
+  decodePageCursor,
+  pageCursorFilter,
+  pageSort,
+} from '../common/pagination/cursor-page';
+import {
+  SEARCH_CUSTOMER_CAP,
+  numberOrCustomerFilter,
+} from '../common/pagination/document-search';
+import { idFilter, idsFilter } from '../common/utils/id-match';
 
 @Injectable()
 export class AmcService {
@@ -148,6 +162,61 @@ export class AmcService {
     const amc = await this.findOne(businessId, amcId);
     await amc.populate('customerId');
     return amc;
+  }
+
+  /**
+   * One page of AMC contracts, newest first.
+   *
+   * Materialising due AMC visits is first-page-only work — it does not
+   * change while the user scrolls, and running it per page would make every
+   * scroll pay for it.
+   */
+  async findPageForBusiness(
+    businessId: string,
+    options: {
+      status?: string;
+      customerId?: string;
+      search?: string;
+      limit?: number;
+      cursor?: string;
+    },
+  ): Promise<Page<AmcDocument>> {
+    const limit = clampLimit(options.limit);
+    const cursor = decodePageCursor(options.cursor);
+    if (!cursor) {
+      await this.syncAmcServices(businessId);
+    }
+
+    const customerIds = options.search
+      ? await this.customersService.findIdsMatching(
+          businessId,
+          options.search,
+          SEARCH_CUSTOMER_CAP,
+        )
+      : [];
+
+    const filter = andFilters(
+      { businessId },
+      options.customerId ? { customerId: idFilter(options.customerId) } : {},
+      options.status && options.status !== 'all' ? { status: options.status } : {},
+      numberOrCustomerFilter(options.search, 'contractNumber', customerIds, idsFilter),
+      pageCursorFilter(cursor, 'createdAt', 'desc'),
+    );
+
+    const [rows, total] = await Promise.all([
+      this.amcModel
+        .find(filter)
+        .sort(pageSort('createdAt', 'desc'))
+        .limit(limit + 1)
+        .populate('customerId', 'name phone')
+        .exec(),
+      cursor ? Promise.resolve(undefined) : this.amcModel.countDocuments(filter).exec(),
+    ]);
+
+    return buildPage(rows, limit, (row) => ({
+      v: (row as unknown as { createdAt: Date }).createdAt.toISOString(),
+      id: (row._id as { toString(): string }).toString(),
+    }), total);
   }
 
   async findAllForBusiness(

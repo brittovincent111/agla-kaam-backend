@@ -140,6 +140,12 @@ export class Business {
   @Prop({ trim: true, maxlength: 100 })
   paymentUpiId?: string;
 
+  @Prop({ trim: true, maxlength: 500 })
+  paymentQrContent?: string;
+
+  @Prop({ trim: true, maxlength: 1000 })
+  bankDetails?: string;
+
   @Prop({ trim: true, maxlength: 100 })
   paymentBankName?: string;
 
@@ -187,6 +193,122 @@ export class Business {
 
   @Prop({ default: false })
   hasSignature: boolean;
+
+  // --- Document Customization & Serial Settings ---
+  @Prop({ trim: true, default: 'INV-' })
+  invoicePrefix?: string;
+
+  @Prop({ default: 1 })
+  invoiceNextSerial?: number;
+
+  @Prop({ default: true })
+  invoiceShowDiscount?: boolean;
+
+  @Prop({ default: true })
+  invoiceShowTax?: boolean;
+
+  @Prop({ default: true })
+  invoiceShowHsn?: boolean;
+
+  @Prop({ trim: true })
+  invoiceTopMessage?: string;
+
+  @Prop({ trim: true })
+  invoiceBottomMessage?: string;
+
+  @Prop({ default: true })
+  invoiceShowBankInfo?: boolean;
+
+  @Prop({ default: true })
+  invoiceShowUpiInfo?: boolean;
+
+  // Quotation Settings
+  @Prop({ trim: true, default: 'QT-' })
+  quotationPrefix?: string;
+
+  @Prop({ default: 1 })
+  quotationNextSerial?: number;
+
+  @Prop({ default: true })
+  quotationShowTax?: boolean;
+
+  @Prop({ default: true })
+  quotationShowHsn?: boolean;
+
+  @Prop({ default: false })
+  quotationShowShippingAddress?: boolean;
+
+  @Prop({ trim: true, default: 'Dear Sir/Mam,\nThank you for your valuable inquiry. We are pleased to quote as below:' })
+  quotationTopMessage?: string;
+
+  @Prop({ trim: true, default: 'We hope you find our offer to be in line with your requirement.' })
+  quotationBottomMessage?: string;
+
+  @Prop({ default: true })
+  quotationShowBankInfo?: boolean;
+
+  @Prop({ default: true })
+  quotationShowUpiInfo?: boolean;
+
+  @Prop({ default: true })
+  quotationShowSignature?: boolean;
+
+  // PO / Purchase Settings
+  @Prop({ trim: true, default: 'PO-' })
+  purchasePrefix?: string;
+
+  @Prop({ default: 1 })
+  purchaseNextSerial?: number;
+
+  @Prop({ default: true })
+  purchaseShowDiscount?: boolean;
+
+  @Prop({ default: true })
+  purchaseShowTax?: boolean;
+
+  @Prop({ default: true })
+  purchaseShowHsn?: boolean;
+
+  @Prop({ trim: true, default: 'Dear Sir/Mam,\nWe are pleased to submit the purchase order as below.' })
+  purchaseTopMessage?: string;
+
+  @Prop({ trim: true, default: 'Your prompt attention to this order is greatly appreciated, and we look forward to a successful transaction.' })
+  purchaseBottomMessage?: string;
+
+  @Prop({ default: true })
+  purchaseShowBankInfo?: boolean;
+
+  // Proforma Invoice Settings
+  @Prop({ trim: true, default: 'PI-' })
+  proformaPrefix?: string;
+
+  @Prop({ default: 1 })
+  proformaNextSerial?: number;
+
+  @Prop({ default: true })
+  proformaShowDiscount?: boolean;
+
+  @Prop({ default: true })
+  proformaShowTax?: boolean;
+
+  @Prop({ default: true })
+  proformaShowHsn?: boolean;
+
+  @Prop({ trim: true })
+  proformaTopMessage?: string;
+
+  @Prop({ trim: true })
+  proformaBottomMessage?: string;
+
+  @Prop({ default: true })
+  proformaShowBankInfo?: boolean;
+
+  @Prop({ default: true })
+  proformaShowUpiInfo?: boolean;
+
+  // Product / Catalog Pricing Settings
+  @Prop({ default: false })
+  enableTaxInclusivePrice?: boolean;
 }
 
 export const BusinessSchema = SchemaFactory.createForClass(Business);

@@ -63,6 +63,8 @@ export interface BusinessWithBranding {
   // second fetch of the business.
   documentAccentColor?: string;
   paymentUpiId?: string;
+  paymentQrContent?: string;
+  bankDetails?: string;
   paymentBankName?: string;
   paymentAccountNumber?: string;
   paymentAccountCode?: string;
@@ -314,6 +316,8 @@ export class BusinessesService implements OnModuleInit {
       signature: signature ?? undefined,
       documentAccentColor: business.documentAccentColor,
       paymentUpiId: business.paymentUpiId,
+      paymentQrContent: business.paymentQrContent,
+      bankDetails: business.bankDetails,
       paymentBankName: business.paymentBankName,
       paymentAccountNumber: business.paymentAccountNumber,
       paymentAccountCode: business.paymentAccountCode,
@@ -593,6 +597,62 @@ export class BusinessesService implements OnModuleInit {
       throw new NotFoundException('Business not found');
     }
     return business;
+  }
+
+  // Hands out the next document serial atomically.
+  //
+  // The previous approach read `invoiceNextSerial`, then wrote back
+  // `serial + 1` in a separate call. Two invoices created at the same moment
+  // both read the same value, both produced the same number, and the second
+  // insert died on the unique {businessId, invoiceNumber} index — surfacing
+  // as a raw 500. A single $inc is indivisible, so each caller gets its own
+  // serial no matter how many run at once.
+  //
+  // `field` is a fixed literal chosen by the caller, never user input.
+  async allocateSerial(
+    id: string,
+    field: 'invoiceNextSerial' | 'quotationNextSerial',
+    seedIfUnset: () => Promise<number>,
+  ): Promise<number> {
+    // Fast path: the counter already exists, so just take the next value.
+    const bumped = await this.businessModel
+      .findOneAndUpdate(
+        { _id: id, [field]: { $gte: 1 } },
+        { $inc: { [field]: 1 } },
+        { new: true },
+      )
+      .exec();
+    if (bumped) {
+      // $inc with new:true returns the value AFTER incrementing, so the
+      // serial this caller owns is one less.
+      return (bumped.get(field) as number) - 1;
+    }
+
+    // First document for this business: seed the counter from whatever is
+    // already there (a business may have invoices from before this field
+    // existed) and claim that serial. The guard on the filter means only one
+    // concurrent caller can seed.
+    const seed = await seedIfUnset();
+    const seeded = await this.businessModel
+      .findOneAndUpdate(
+        { _id: id, [field]: { $in: [null, 0], $exists: true } },
+        { $set: { [field]: seed + 1 } },
+        { new: true },
+      )
+      .exec();
+    if (seeded) return seed;
+
+    const unset = await this.businessModel
+      .findOneAndUpdate(
+        { _id: id, [field]: { $exists: false } },
+        { $set: { [field]: seed + 1 } },
+        { new: true },
+      )
+      .exec();
+    if (unset) return seed;
+
+    // Someone else seeded it in the meantime — take a normal turn.
+    return this.allocateSerial(id, field, seedIfUnset);
   }
 
   async updatePushToken(id: string, pushToken: string): Promise<void> {

@@ -14,6 +14,7 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -23,7 +24,12 @@ import {
 } from '../common/decorators/current-business.decorator';
 import { ServicesService } from './services.service';
 import { CreateServiceDto } from './dto/create-service.dto';
+import { ListServicesDto } from './dto/list-services.dto';
 import { RescheduleServiceDto } from './dto/reschedule-service.dto';
+
+// Ceiling on a customer's service history in one response. Well past what
+// any real customer accumulates, and it keeps the endpoint bounded.
+const MAX_HISTORY_LIMIT = 200;
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
 const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
@@ -39,6 +45,29 @@ export class ServicesController {
     @Body() dto: CreateServiceDto,
   ) {
     return this.servicesService.create(business.businessId, dto, business);
+  }
+
+  // MUST stay above @Get(':id') — Nest matches routes in declaration order,
+  // and ':id' would otherwise swallow "/page" and try to look up a service
+  // whose id is the literal string "page".
+  // Paged, filtered and searched on the server. A separate route from GET
+  // /services on purpose: that one returns a bare array and is still what
+  // already-installed app versions call, so its shape must not change.
+  //
+  // Above the global 60/min budget for the same reason the customer page is:
+  // scrolling a long list plus a few debounced search terms is easily a dozen
+  // calls, and using the app normally must not return "Too Many Requests".
+  @Throttle({ default: { limit: 240, ttl: 60000 } })
+  @Get('page')
+  findPage(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Query() query: ListServicesDto,
+  ) {
+    return this.servicesService.findPageForBusiness(
+      business.businessId,
+      business,
+      query,
+    );
   }
 
   @Get(':id')
@@ -99,12 +128,19 @@ export class ServicesController {
     @CurrentBusiness() business: AuthenticatedBusiness,
     @Query('customerId') customerId?: string,
     @Query('status') status?: string,
+    // Optional, and only meaningful alongside customerId. Capped so a typo
+    // in the query string cannot ask for an unbounded history.
+    @Query('limit') limit?: string,
   ) {
     if (customerId) {
+      const parsed = Number.parseInt(limit ?? '', 10);
       return this.servicesService.findHistoryForCustomer(
         business.businessId,
         customerId,
         business,
+        Number.isFinite(parsed) && parsed > 0
+          ? Math.min(parsed, MAX_HISTORY_LIMIT)
+          : undefined,
       );
     }
     return this.servicesService.findAllForBusiness(

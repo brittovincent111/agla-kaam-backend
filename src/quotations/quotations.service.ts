@@ -10,8 +10,25 @@ import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { InvoicingService } from '../invoicing/invoicing.service';
 import { BusinessesService } from '../businesses/businesses.service';
 import { InvoiceDocument } from '../invoicing/schemas/invoice.schema';
-import { calculateInvoiceTotals } from '../common/constants/invoice-options';
+import {
+  applyLineTax,
+  calculateInvoiceTotals,
+} from '../common/constants/invoice-options';
 import { FREE_TIER_QUOTATION_LIMIT, tierHasInvoicing } from '../common/constants/subscription-options';
+import {
+  Page,
+  andFilters,
+  buildPage,
+  clampLimit,
+  decodePageCursor,
+  pageCursorFilter,
+  pageSort,
+} from '../common/pagination/cursor-page';
+import {
+  SEARCH_CUSTOMER_CAP,
+  numberOrCustomerFilter,
+} from '../common/pagination/document-search';
+import { idFilter, idsFilter } from '../common/utils/id-match';
 
 const DEFAULT_VALIDITY_DAYS = 15;
 
@@ -33,8 +50,16 @@ export class QuotationsService {
   ) {}
 
   private async nextQuotationNumber(businessId: string): Promise<string> {
-    const count = await this.quotationModel.countDocuments({ businessId }).exec();
-    return `QUO-${String(count + 1).padStart(4, '0')}`;
+    const business = await this.businessesService.findById(businessId);
+    const prefix = business?.quotationPrefix || 'QT-';
+    // Atomic — see BusinessesService.allocateSerial.
+    const serial = await this.businessesService.allocateSerial(
+      businessId,
+      'quotationNextSerial',
+      async () =>
+        (await this.quotationModel.countDocuments({ businessId }).exec()) + 1,
+    );
+    return `${prefix}${new Date().getFullYear()}-${String(serial).padStart(3, '0')}`;
   }
 
   private async buildItems(businessId: string, customerId: string, dtoItems: CreateQuotationDto['items']) {
@@ -50,7 +75,11 @@ export class QuotationsService {
         }
         const taxRate = item.taxRate ?? 0;
         const amount = Math.round((item.quantity * item.rate + Number.EPSILON) * 100) / 100;
-        const taxAmount = Math.round((amount * (taxRate / 100) + Number.EPSILON) * 100) / 100;
+        // Placeholder only. The real per-line tax depends on this line's share
+        // of the invoice-level discount, which is not known until every line
+        // is priced — applyLineTax() below overwrites it from
+        // calculateInvoiceTotals().
+        const taxAmount = 0;
         return {
           serviceId: item.serviceId,
           name: item.name,
@@ -87,6 +116,7 @@ export class QuotationsService {
 
     const items = await this.buildItems(businessId, dto.customerId, dto.items);
     const totals = calculateInvoiceTotals(items, dto.discount ?? 0);
+    applyLineTax(items, totals);
     const quotationDate = dto.quotationDate ? new Date(dto.quotationDate) : new Date();
     const validUntil = dto.validUntil ? new Date(dto.validUntil) : addDays(quotationDate, DEFAULT_VALIDITY_DAYS);
     const quotationNumber = await this.nextQuotationNumber(businessId);
@@ -125,6 +155,59 @@ export class QuotationsService {
     const quotation = await this.findOne(businessId, quotationId);
     await quotation.populate('customerId');
     return quotation;
+  }
+
+  /**
+   * One page of quotations, newest first.
+   *
+   * The unpaged read below fetches every quotation and then filters the
+   * search in JavaScript, which cannot survive paging — so the search runs
+   * as part of the query here, still reaching the customer's name and phone
+   * via a bounded id lookup.
+   */
+  async findPageForBusiness(
+    businessId: string,
+    options: {
+      status?: string;
+      search?: string;
+      customerId?: string;
+      limit?: number;
+      cursor?: string;
+    },
+  ): Promise<Page<QuotationDocument>> {
+    const limit = clampLimit(options.limit);
+    const cursor = decodePageCursor(options.cursor);
+
+    const customerIds = options.search
+      ? await this.customersService.findIdsMatching(
+          businessId,
+          options.search,
+          SEARCH_CUSTOMER_CAP,
+        )
+      : [];
+
+    const filter = andFilters(
+      { businessId },
+      options.customerId ? { customerId: idFilter(options.customerId) } : {},
+      options.status && options.status !== 'all' ? { status: options.status } : {},
+      numberOrCustomerFilter(options.search, 'quotationNumber', customerIds, idsFilter),
+      pageCursorFilter(cursor, 'quotationDate', 'desc'),
+    );
+
+    const [rows, total] = await Promise.all([
+      this.quotationModel
+        .find(filter)
+        .sort(pageSort('quotationDate', 'desc'))
+        .limit(limit + 1)
+        .populate('customerId', 'name phone')
+        .exec(),
+      cursor ? Promise.resolve(undefined) : this.quotationModel.countDocuments(filter).exec(),
+    ]);
+
+    return buildPage(rows, limit, (row) => ({
+      v: row.quotationDate.toISOString(),
+      id: (row._id as { toString(): string }).toString(),
+    }), total);
   }
 
   async findAllForBusiness(

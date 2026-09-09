@@ -22,6 +22,9 @@ import { AppFeedbackModule } from './app-feedback/app-feedback.module';
 import { LegalModule } from './legal/legal.module';
 import { AdminModule } from './admin/admin.module';
 import { AmcModule } from './amc/amc.module';
+import { InventoryModule } from './inventory/inventory.module';
+import { PurchasesModule } from './purchases/purchases.module';
+import { ProformaInvoicesModule } from './proforma-invoices/proforma-invoices.module';
 import { validate } from './env.validation';
 
 @Module({
@@ -69,6 +72,9 @@ import { validate } from './env.validation';
     LegalModule,
     AdminModule,
     AmcModule,
+    InventoryModule,
+    PurchasesModule,
+    ProformaInvoicesModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],

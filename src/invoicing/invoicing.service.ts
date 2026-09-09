@@ -10,8 +10,26 @@ import { CustomersService } from '../customers/customers.service';
 import { ServicesService } from '../services/services.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { BusinessesService } from '../businesses/businesses.service';
-import { calculateInvoiceTotals, computeDisplayStatus } from '../common/constants/invoice-options';
+import {
+  applyLineTax,
+  calculateInvoiceTotals,
+  computeDisplayStatus,
+} from '../common/constants/invoice-options';
 import { FREE_TIER_INVOICE_LIMIT, tierHasInvoicing } from '../common/constants/subscription-options';
+import {
+  Page,
+  andFilters,
+  buildPage,
+  clampLimit,
+  decodePageCursor,
+  pageCursorFilter,
+  pageSort,
+} from '../common/pagination/cursor-page';
+import {
+  SEARCH_CUSTOMER_CAP,
+  numberOrCustomerFilter,
+} from '../common/pagination/document-search';
+import { idFilter, idsFilter } from '../common/utils/id-match';
 
 const DEFAULT_PAYMENT_TERM_DAYS = 7;
 
@@ -20,6 +38,8 @@ function addDays(date: Date, days: number): Date {
   result.setDate(result.getDate() + days);
   return result;
 }
+
+import { InventoryService } from '../inventory/inventory.service';
 
 @Injectable()
 export class InvoicingService {
@@ -30,6 +50,7 @@ export class InvoicingService {
     private readonly servicesService: ServicesService,
     private readonly subscriptionsService: SubscriptionsService,
     private readonly businessesService: BusinessesService,
+    private readonly inventoryService: InventoryService,
   ) {}
 
   private withDisplayStatus(invoice: InvoiceDocument): Invoice & { _id: Types.ObjectId } {
@@ -41,8 +62,17 @@ export class InvoicingService {
   }
 
   private async nextInvoiceNumber(businessId: string): Promise<string> {
-    const count = await this.invoiceModel.countDocuments({ businessId }).exec();
-    return `INV-${String(count + 1).padStart(4, '0')}`;
+    const business = await this.businessesService.findById(businessId);
+    const prefix = business?.invoicePrefix || 'INV-';
+    // Atomic — see BusinessesService.allocateSerial. Seeded from the count
+    // only the very first time, for businesses that pre-date the counter.
+    const serial = await this.businessesService.allocateSerial(
+      businessId,
+      'invoiceNextSerial',
+      async () =>
+        (await this.invoiceModel.countDocuments({ businessId }).exec()) + 1,
+    );
+    return `${prefix}${new Date().getFullYear()}-${String(serial).padStart(3, '0')}`;
   }
 
   private async buildItems(businessId: string, customerId: string, dtoItems: CreateInvoiceDto['items']) {
@@ -58,7 +88,11 @@ export class InvoicingService {
         }
         const taxRate = item.taxRate ?? 0;
         const amount = Math.round((item.quantity * item.rate + Number.EPSILON) * 100) / 100;
-        const taxAmount = Math.round((amount * (taxRate / 100) + Number.EPSILON) * 100) / 100;
+        // Placeholder only. The real per-line tax depends on this line's share
+        // of the invoice-level discount, which is not known until every line
+        // is priced — applyLineTax() below overwrites it from
+        // calculateInvoiceTotals().
+        const taxAmount = 0;
         return {
           serviceId: item.serviceId,
           name: item.name,
@@ -95,11 +129,12 @@ export class InvoicingService {
 
     const items = await this.buildItems(businessId, dto.customerId, dto.items);
     const totals = calculateInvoiceTotals(items, dto.discount ?? 0);
+    applyLineTax(items, totals);
     const invoiceDate = dto.invoiceDate ? new Date(dto.invoiceDate) : new Date();
     const dueDate = dto.dueDate ? new Date(dto.dueDate) : addDays(invoiceDate, DEFAULT_PAYMENT_TERM_DAYS);
     const invoiceNumber = await this.nextInvoiceNumber(businessId);
 
-    return this.invoiceModel.create({
+    const created = await this.invoiceModel.create({
       businessId,
       customerId: dto.customerId,
       invoiceNumber,
@@ -119,6 +154,26 @@ export class InvoicingService {
       paymentTerms: dto.paymentTerms,
       termsAndConditions: dto.termsAndConditions,
     });
+
+    try {
+      const inventoryItems = await this.inventoryService.findAll(businessId);
+      for (const item of dto.items) {
+        const match = inventoryItems.find(
+          (inv) => inv.name.trim().toLowerCase() === item.name.trim().toLowerCase(),
+        );
+        if (match && !match.isService) {
+          await this.inventoryService.adjustStock(
+            businessId,
+            (match as any)._id.toString(),
+            -item.quantity,
+          );
+        }
+      }
+    } catch {
+      // Stock adjustment fails gracefully if matching item isn't tracked
+    }
+
+    return created;
   }
 
   async findOne(businessId: string, invoiceId: string): Promise<InvoiceDocument> {
@@ -177,6 +232,89 @@ export class InvoicingService {
     return withStatus;
   }
 
+  /**
+   * One page of invoices, newest first.
+   *
+   * The unpaged findAllForBusiness above fetches every invoice the business
+   * has ever raised and then filters it in JavaScript — both the search and
+   * the "overdue" chip. Neither survives paging, so both become part of the
+   * query here. It stays for already-installed app versions.
+   */
+  async findPageForBusiness(
+    businessId: string,
+    options: {
+      status?: string;
+      search?: string;
+      customerId?: string;
+      limit?: number;
+      cursor?: string;
+    },
+  ): Promise<Page<Invoice & { _id: Types.ObjectId }>> {
+    const limit = clampLimit(options.limit);
+    const cursor = decodePageCursor(options.cursor);
+
+    const customerIds = options.search
+      ? await this.customersService.findIdsMatching(
+          businessId,
+          options.search,
+          SEARCH_CUSTOMER_CAP,
+        )
+      : [];
+
+    const filter = andFilters(
+      { businessId },
+      options.customerId ? { customerId: idFilter(options.customerId) } : {},
+      this.statusFilter(options.status),
+      numberOrCustomerFilter(options.search, 'invoiceNumber', customerIds, idsFilter),
+      pageCursorFilter(cursor, 'invoiceDate', 'desc'),
+    );
+
+    const [rows, total] = await Promise.all([
+      this.invoiceModel
+        .find(filter)
+        .sort(pageSort('invoiceDate', 'desc'))
+        .limit(limit + 1)
+        .populate('customerId', 'name phone')
+        .exec(),
+      cursor ? Promise.resolve(undefined) : this.invoiceModel.countDocuments(filter).exec(),
+    ]);
+
+    const page = buildPage(rows, limit, (row) => ({
+      v: row.invoiceDate.toISOString(),
+      id: (row._id as { toString(): string }).toString(),
+    }), total);
+
+    // The display status is derived at read time, so it is applied to the
+    // page rather than filtered on afterwards — see statusFilter.
+    return { ...page, items: page.items.map((row) => this.withDisplayStatus(row)) };
+  }
+
+  // 'overdue' is never stored — it is what an unpaid or part-paid invoice
+  // past its due date looks like (computeDisplayStatus). Filtering for it in
+  // JavaScript after the fact cannot be paged, so it is spelled out as a
+  // query here. The two must agree; if computeDisplayStatus changes, this
+  // has to change with it.
+  private statusFilter(status?: string): Record<string, unknown> {
+    if (!status || status === 'all') return {};
+    if (status === 'overdue') {
+      return {
+        status: { $in: ['unpaid', 'partially_paid'] },
+        balanceDue: { $gt: 0 },
+        dueDate: { $lt: new Date() },
+      };
+    }
+    // The stored statuses that *would* read as overdue are excluded from
+    // their own bucket, so "unpaid" and "overdue" do not both claim the same
+    // invoice — which is exactly what the app shows on the two chips.
+    if (status === 'unpaid' || status === 'partially_paid') {
+      return {
+        status,
+        $or: [{ balanceDue: { $lte: 0 } }, { dueDate: { $gte: new Date() } }],
+      };
+    }
+    return { status };
+  }
+
   async findOutstandingSummary(businessId: string) {
     const invoices = await this.invoiceModel
       .find({ businessId, status: { $in: ['unpaid', 'partially_paid'] } })
@@ -217,6 +355,7 @@ export class InvoicingService {
       invoice.items.map((item) => ({ quantity: item.quantity, rate: item.rate, taxRate: item.taxRate })),
       dto.discount ?? invoice.discount,
     );
+    applyLineTax(invoice.items, totals);
     invoice.subtotal = totals.subtotal;
     invoice.discount = totals.discount;
     invoice.taxTotal = totals.taxTotal;

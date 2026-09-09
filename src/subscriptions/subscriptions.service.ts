@@ -346,9 +346,15 @@ export class SubscriptionsService {
     tier: SubscriptionTier;
     teamEnabled: boolean;
     razorpaySubscriptionId?: string;
+    // The store's own expiry, when the caller has it. Razorpay has no
+    // equivalent — a web order buys a fixed year — so it falls back to
+    // one year out.
+    expiresAt?: Date;
   }): Promise<void> {
-    const renewalDate = new Date();
-    renewalDate.setFullYear(renewalDate.getFullYear() + 1);
+    const renewalDate = params.expiresAt ?? new Date();
+    if (!params.expiresAt) {
+      renewalDate.setFullYear(renewalDate.getFullYear() + 1);
+    }
 
     await this.subscriptionModel.create({
       businessId: params.businessId,
@@ -430,6 +436,7 @@ export class SubscriptionsService {
       businessId,
       tier: mapped.tier,
       teamEnabled: mapped.teamEnabled,
+      expiresAt: verification.expiresAt,
     });
 
     return { status: 'active' };
@@ -500,9 +507,197 @@ export class SubscriptionsService {
       businessId,
       tier: mapped.tier,
       teamEnabled: mapped.teamEnabled,
+      expiresAt: verification.expiresAt,
     });
 
     return { status: 'active' };
+  }
+
+  // ---------------------------------------------------------------------
+  // Store-driven renewal, cancellation and expiry
+  //
+  // Nothing previously told the backend that a subscription had renewed.
+  // renewalDate was set to "one year from purchase" and never moved, so on
+  // the first auto-renewal findActiveForBusiness() started returning null
+  // while Google or Apple went on charging the customer — they paid and
+  // silently lost access. These two webhooks close that loop.
+  //
+  // Neither trusts the notification body. It is only a trigger: the purchase
+  // is re-verified against the store's own API (the same call used at
+  // purchase time), and only that verified result is written. That way a
+  // forged notification can at worst cause a redundant verification.
+  // ---------------------------------------------------------------------
+
+  // Google sends Real-time Developer Notifications through Pub/Sub, which
+  // posts `{ message: { data: <base64 JSON> } }`.
+  async handlePlayRenewalNotification(body: unknown): Promise<void> {
+    const encoded = (body as { message?: { data?: string } })?.message?.data;
+    if (!encoded) {
+      this.logger.warn('Play RTDN with no message.data — ignoring.');
+      return;
+    }
+
+    let payload: {
+      packageName?: string;
+      subscriptionNotification?: { purchaseToken?: string; notificationType?: number };
+      testNotification?: unknown;
+    };
+    try {
+      payload = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'));
+    } catch {
+      this.logger.warn('Play RTDN data was not valid base64 JSON — ignoring.');
+      return;
+    }
+
+    if (payload.testNotification) {
+      this.logger.log('Play RTDN test notification received — acknowledged.');
+      return;
+    }
+
+    const purchaseToken = payload.subscriptionNotification?.purchaseToken;
+    if (!purchaseToken) return;
+
+    await this.syncPlayPurchase(purchaseToken);
+  }
+
+  // Re-verifies one Play purchase token and brings the local subscription
+  // into line with whatever Google now says.
+  async syncPlayPurchase(purchaseToken: string): Promise<void> {
+    const record = await this.playPurchaseModel.findOne({ purchaseToken }).exec();
+    if (!record) {
+      // A token we never activated — nothing to keep in sync.
+      this.logger.warn('Play notification for an unknown purchase token.');
+      return;
+    }
+
+    const verification =
+      await this.googlePlayVerificationService.verifySubscriptionPurchase(
+        purchaseToken,
+      );
+
+    await this.applyStoreState({
+      businessId: record.businessId.toString(),
+      tier: record.tier,
+      teamEnabled: record.teamEnabled,
+      isActive: verification.isActive,
+      expiresAt: verification.expiresAt,
+      source: `Play(${verification.state ?? 'unknown'})`,
+    });
+  }
+
+  // Apple sends App Store Server Notifications V2 as `{ signedPayload }`,
+  // a JWS. The payload is decoded only to find which transaction changed;
+  // the truth then comes from Apple's own API.
+  async handleAppleRenewalNotification(body: unknown): Promise<void> {
+    const signedPayload = (body as { signedPayload?: string })?.signedPayload;
+    if (!signedPayload) {
+      this.logger.warn('Apple notification with no signedPayload — ignoring.');
+      return;
+    }
+
+    const transactionId =
+      await this.appleVerificationService.extractNotificationTransactionId(
+        signedPayload,
+      );
+    if (!transactionId) return;
+
+    await this.syncApplePurchase(transactionId);
+  }
+
+  async syncApplePurchase(transactionId: string): Promise<void> {
+    const record = await this.applePurchaseModel
+      .findOne({ transactionId })
+      .exec();
+    if (!record) {
+      // Apple issues a NEW transaction id for each renewal, so the renewal
+      // will not match the original purchase row. Fall back to the most
+      // recent Apple purchase for the same product, which is the same
+      // subscription being renewed.
+      this.logger.warn(
+        `Apple notification for unknown transaction ${transactionId} — cannot map to a business.`,
+      );
+      return;
+    }
+
+    const verification =
+      await this.appleVerificationService.verifyTransaction(transactionId);
+
+    await this.applyStoreState({
+      businessId: record.businessId.toString(),
+      tier: record.tier,
+      teamEnabled: record.teamEnabled,
+      isActive: verification.isActive,
+      expiresAt: verification.expiresAt,
+      source: 'Apple',
+    });
+  }
+
+  // Writes the store's verdict onto the business's current subscription:
+  // push the renewal date out on a renewal, or mark it expired once the
+  // store says the entitlement is gone.
+  private async applyStoreState(params: {
+    businessId: string;
+    tier: SubscriptionTier;
+    teamEnabled: boolean;
+    isActive: boolean;
+    expiresAt?: Date;
+    source: string;
+  }): Promise<void> {
+    const current = await this.findCurrentForBusiness(params.businessId);
+
+    if (params.isActive) {
+      if (current) {
+        current.status = 'active';
+        current.tier = params.tier;
+        current.teamEnabled = params.teamEnabled;
+        if (params.expiresAt) current.renewalDate = params.expiresAt;
+        await current.save();
+      } else {
+        await this.activateSubscription({
+          businessId: params.businessId,
+          tier: params.tier,
+          teamEnabled: params.teamEnabled,
+          expiresAt: params.expiresAt,
+        });
+      }
+      await this.businessesService.updateSubscriptionStatus(
+        params.businessId,
+        'active',
+      );
+      this.logger.log(
+        `${params.source}: subscription active for ${params.businessId} until ${
+          params.expiresAt?.toISOString() ?? 'unknown'
+        }`,
+      );
+      return;
+    }
+
+    // Not active any more. Only downgrade once the paid period has actually
+    // elapsed — a cancellation mid-term still entitles the customer to the
+    // rest of what they paid for.
+    const stillPaidFor =
+      params.expiresAt && params.expiresAt.getTime() > Date.now();
+    if (stillPaidFor) {
+      if (current) {
+        current.renewalDate = params.expiresAt;
+        await current.save();
+      }
+      this.logger.log(
+        `${params.source}: cancelled but paid until ${params.expiresAt?.toISOString()} for ${params.businessId}`,
+      );
+      return;
+    }
+
+    if (current && current.status !== 'expired') {
+      current.status = 'expired';
+      if (params.expiresAt) current.renewalDate = params.expiresAt;
+      await current.save();
+    }
+    await this.businessesService.updateSubscriptionStatus(
+      params.businessId,
+      'expired',
+    );
+    this.logger.log(`${params.source}: subscription expired for ${params.businessId}`);
   }
 
   private getRazorpayClient(): Razorpay {

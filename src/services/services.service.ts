@@ -16,6 +16,18 @@ import {
   resolveNextServiceDate,
   resolveWarrantyExpiry,
 } from '../common/constants/service-options';
+import { idFilter, idsFilter } from '../common/utils/id-match';
+import {
+  Page,
+  andFilters,
+  buildPage,
+  clampLimit,
+  decodePageCursor,
+  escapeRegex,
+  pageCursorFilter,
+  pageSort,
+} from '../common/pagination/cursor-page';
+import { startOfLocalDay } from '../common/utils/timezone';
 
 import { AmcService } from '../amc/amc.service';
 import { S3Service } from '../common/s3/s3.service';
@@ -202,20 +214,35 @@ export class ServicesService {
     return service.save();
   }
 
+  /**
+   * A customer's service history, most recent first.
+   *
+   * `limit` caps how many rows come back. The customer detail screen asks for
+   * a bounded slice: a customer on a monthly AMC accumulates hundreds of
+   * rows, and every one of them was being sent, parsed and rendered on each
+   * visit to the screen. Omitting the limit returns the whole history, which
+   * is what already-installed app versions expect.
+   */
   async findHistoryForCustomer(
     businessId: string,
     customerId: string,
     viewer: AuthenticatedBusiness,
+    limit?: number,
   ): Promise<ServiceDocument[]> {
     // Confirms the customer belongs to this business (also 404s on a bad id,
     // and — for a technician — on a customer that isn't assigned to them).
     await this.customersService.findOneForViewer(businessId, customerId, viewer);
 
-    return this.serviceModel
+    const query = this.serviceModel
       .find({ businessId, customerId })
       .sort({ serviceDate: -1 })
-      .populate('assignedTechnicianId', 'name')
-      .exec();
+      .populate('assignedTechnicianId', 'name');
+
+    // One past the asked-for count, so the caller can tell "exactly this
+    // many" from "this many and more" without a second count query.
+    if (limit && limit > 0) query.limit(limit + 1);
+
+    return query.exec();
   }
 
   async findAllForBusiness(
@@ -244,6 +271,115 @@ export class ServicesService {
       .exec();
   }
 
+  // How many customers a name search may expand to before it stops widening.
+  // A service stores only its customer's id, so searching by customer name
+  // means resolving names to ids first; a term like "kumar" can match the
+  // whole book, and an unbounded $in would put every id in the business into
+  // the query. Terms this broad are not how anyone finds one job.
+  private static readonly SEARCH_CUSTOMER_CAP = 500;
+
+  /**
+   * One page of services, newest-due first.
+   *
+   * The unpaged findAllForBusiness above returns every non-cancelled service
+   * a business has ever logged — 9.65 MB for 15,000 of them, parsed on the
+   * phone before a single row is drawn. It stays for already-installed app
+   * versions; new ones use this.
+   */
+  async findPageForBusiness(
+    businessId: string,
+    viewer: AuthenticatedBusiness | undefined,
+    options: {
+      status?: string;
+      customerId?: string;
+      due?: 'overdue' | 'today' | 'upcoming';
+      search?: string;
+      limit?: number;
+      cursor?: string;
+    },
+  ): Promise<Page<ServiceDocument>> {
+    const limit = clampLimit(options.limit);
+    const cursor = decodePageCursor(options.cursor);
+
+    // Materialising AMC visits is first-page-only work: it does not change
+    // while the user scrolls, and running it per page would make every scroll
+    // pay for it.
+    if (!cursor) {
+      await this.amcService.syncAmcServices(businessId);
+    }
+
+    const filter = andFilters(
+      { businessId },
+      await this.technicianServiceFilter(businessId, viewer),
+      options.status && options.status !== 'all'
+        ? { status: options.status }
+        : // Cancelled services are history, not work — same default the
+          // unpaged list applies.
+          { status: { $ne: 'cancelled' } },
+      options.customerId ? { customerId: idFilter(options.customerId) } : {},
+      this.dueWindowFilter(options.due),
+      await this.serviceSearchFilter(businessId, options.search),
+      pageCursorFilter(cursor, 'nextServiceDate', 'asc'),
+    );
+
+    // Soonest due first — this is the upcoming-work tracker, not a history
+    // log — with _id breaking ties so two services due the same day cannot
+    // straddle a page boundary and lose one of themselves.
+    const [rows, total] = await Promise.all([
+      this.serviceModel
+        .find(filter)
+        .sort(pageSort('nextServiceDate', 'asc'))
+        .limit(limit + 1)
+        .populate('customerId', 'name phone')
+        .populate('assignedTechnicianId', 'name')
+        .exec(),
+      cursor ? Promise.resolve(undefined) : this.serviceModel.countDocuments(filter).exec(),
+    ]);
+
+    return buildPage(rows, limit, (row) => ({
+      v: row.nextServiceDate.toISOString(),
+      id: (row._id as { toString(): string }).toString(),
+    }), total);
+  }
+
+  // The overdue / due-today / upcoming split the app used to compute on the
+  // device after downloading everything. It cannot be done on one page, so it
+  // has to be part of the query.
+  private dueWindowFilter(due?: 'overdue' | 'today' | 'upcoming'): Record<string, unknown> {
+    if (!due) return {};
+    // Server local day, matching how the reminder feeds already bucket dates.
+    const startOfToday = startOfLocalDay(undefined, new Date());
+    const startOfTomorrow = new Date(startOfToday.getTime() + 86_400_000);
+    if (due === 'overdue') return { nextServiceDate: { $lt: startOfToday } };
+    if (due === 'today') {
+      return { nextServiceDate: { $gte: startOfToday, $lt: startOfTomorrow } };
+    }
+    return { nextServiceDate: { $gte: startOfTomorrow } };
+  }
+
+  // Matches the service type, and the customer's name via a bounded id lookup
+  // — the app's search box has always covered both.
+  private async serviceSearchFilter(
+    businessId: string,
+    search?: string,
+  ): Promise<Record<string, unknown>> {
+    const term = (search ?? '').trim();
+    if (!term) return {};
+    const escaped = escapeRegex(term);
+    const customerIds = await this.customersService.findIdsMatching(
+      businessId,
+      term,
+      ServicesService.SEARCH_CUSTOMER_CAP,
+    );
+    const clauses: Record<string, unknown>[] = [
+      { serviceType: { $regex: escaped, $options: 'i' } },
+    ];
+    if (customerIds.length) {
+      clauses.push({ customerId: idsFilter(customerIds) });
+    }
+    return { $or: clauses };
+  }
+
   // A technician's reminder feeds are scoped to services that are theirs —
   // either the customer's default assignment, or a service reassigned to
   // them directly, overriding that default for just this one visit.
@@ -260,10 +396,14 @@ export class ServicesService {
     // field nested inside $or (verified: it silently matched nothing here
     // even though the same string equality works fine as a top-level key
     // elsewhere in this file, e.g. findAssignedCustomerIds).
-    const teamMemberObjectId = new Types.ObjectId(viewer.teamMemberId);
+    // idFilter, not a bare ObjectId: assignedTechnicianId compiles to a Mixed
+    // path, so it holds an ObjectId for rows written by reschedule() and a
+    // plain string for rows written elsewhere. Matching only the ObjectId form
+    // hid a technician's own reassigned services from the Services list while
+    // the reminder feeds — which already used idFilter — showed them.
     return {
       $or: [
-        { assignedTechnicianId: teamMemberObjectId },
+        { assignedTechnicianId: idFilter(viewer.teamMemberId!) },
         { assignedTechnicianId: { $exists: false }, customerId: { $in: customerIds } },
       ],
     };
@@ -273,59 +413,172 @@ export class ServicesService {
   // visit for) a customer whose default technician is someone else, when a
   // specific service has been reassigned to them directly.
   async findAssignedServiceCustomerIds(businessId: string, teamMemberId: string): Promise<string[]> {
-    // Cast explicitly rather than trust Mongoose to cast a plain string
-    // against the schema for a .distinct() filter — the same silent
-    // non-match seen with $or above, so it's not worth relying on implicit
-    // casting anywhere on this path.
+    // Both representations, for the same reason as technicianServiceFilter.
     const customerIds = await this.serviceModel
       .distinct('customerId', {
         businessId,
-        assignedTechnicianId: new Types.ObjectId(teamMemberId),
+        assignedTechnicianId: idFilter(teamMemberId),
       })
       .exec();
     return customerIds.map((id) => id.toString());
   }
+
+  // The soonest-due service for each of a small set of customers — the one
+  // the customer list shows a status pill for.
+  //
+  // Replaces the client-side join that required downloading every service the
+  // business had ever logged. Scoped to one page of customer ids, so the
+  // amount of work does not grow with the size of the business.
+  //
+  // "Soonest due", not "most recently logged": a customer with an overdue AC
+  // service and a comfortable RO service must surface the overdue one. This
+  // is the same rule the app applied client-side (latestRelevantService), so
+  // moving the join to the server does not change which row is chosen.
+  async upcomingServiceSummaries(
+    businessId: string,
+    customerIds: string[],
+  ): Promise<
+    Map<
+      string,
+      {
+        _id: string;
+        serviceType: string;
+        serviceDate: Date;
+        nextServiceDate: Date;
+        warrantyExpiry?: Date | null;
+      }
+    >
+  > {
+    const summaries = new Map<
+      string,
+      {
+        _id: string;
+        serviceType: string;
+        serviceDate: Date;
+        nextServiceDate: Date;
+        warrantyExpiry?: Date | null;
+      }
+    >();
+    if (!customerIds.length) return summaries;
+
+    // Sorted soonest-due-first so the first row seen for a customer is the one
+    // kept — cheaper than a $group with $first over the whole collection.
+    const rows = await this.serviceModel
+      .find({ businessId, customerId: idsFilter(customerIds) })
+      .select('customerId serviceType serviceDate nextServiceDate warrantyExpiry')
+      .sort({ nextServiceDate: 1 })
+      .exec();
+
+    for (const row of rows) {
+      const key = row.customerId.toString();
+      if (summaries.has(key)) continue;
+      summaries.set(key, {
+        _id: (row._id as { toString(): string }).toString(),
+        serviceType: row.serviceType,
+        serviceDate: row.serviceDate,
+        nextServiceDate: row.nextServiceDate,
+        warrantyExpiry: row.warrantyExpiry,
+      });
+    }
+    return summaries;
+  }
+
+  // A cancelled service is not upcoming work, so it does not belong in any
+  // reminder feed. The main services list has always excluded it; these
+  // feeds did not, which put cancelled jobs in Home's "Overdue" section and
+  // in the WhatsApp reminder run.
+  private static readonly NOT_CANCELLED = { status: { $ne: 'cancelled' } };
 
   async findDueBetween(
     businessId: string,
     from: Date,
     to: Date,
     viewer?: AuthenticatedBusiness,
+    limit?: number,
   ): Promise<ServiceDocument[]> {
     await this.amcService.syncAmcServices(businessId);
-    return this.serviceModel
-      .find({ businessId, nextServiceDate: { $gte: from, $lt: to }, ...(await this.technicianServiceFilter(businessId, viewer)) })
-      .sort({ nextServiceDate: 1 })
-      .populate('customerId')
-      .populate('assignedTechnicianId', 'name')
-      .exec();
+    return this.reminderQuery(
+      businessId,
+      { nextServiceDate: { $gte: from, $lt: to } },
+      'nextServiceDate',
+      viewer,
+      limit,
+    );
   }
 
-  async findOverdue(businessId: string, before: Date, viewer?: AuthenticatedBusiness): Promise<ServiceDocument[]> {
+  async findOverdue(
+    businessId: string,
+    before: Date,
+    viewer?: AuthenticatedBusiness,
+    limit?: number,
+  ): Promise<ServiceDocument[]> {
     await this.amcService.syncAmcServices(businessId);
-    return this.serviceModel
-      .find({ businessId, nextServiceDate: { $lt: before }, ...(await this.technicianServiceFilter(businessId, viewer)) })
-      .sort({ nextServiceDate: 1 })
-      .populate('customerId')
-      .populate('assignedTechnicianId', 'name')
-      .exec();
+    return this.reminderQuery(
+      businessId,
+      { nextServiceDate: { $lt: before } },
+      'nextServiceDate',
+      viewer,
+      limit,
+    );
   }
 
   async findWarrantyAlerts(
     businessId: string,
     expiringBefore: Date,
     viewer?: AuthenticatedBusiness,
+    limit?: number,
   ): Promise<ServiceDocument[]> {
+    return this.reminderQuery(
+      businessId,
+      { warrantyExpiry: { $ne: null, $lt: expiringBefore } },
+      'warrantyExpiry',
+      viewer,
+      limit,
+    );
+  }
+
+  // How many rows a reminder feed returns, and how many there are in total.
+  // Home shows a preview of each feed, not the whole thing — a business with
+  // 500 overdue jobs was sending 482 KB and rendering 500 cards on the
+  // dashboard, which froze the app before anything could be tapped.
+  async countReminders(
+    businessId: string,
+    window: Record<string, unknown>,
+    viewer?: AuthenticatedBusiness,
+  ): Promise<number> {
     return this.serviceModel
-      .find({
-        businessId,
-        warrantyExpiry: { $ne: null, $lt: expiringBefore },
-        ...(await this.technicianServiceFilter(businessId, viewer)),
-      })
-      .sort({ warrantyExpiry: 1 })
-      .populate('customerId')
-      .populate('assignedTechnicianId', 'name')
+      .countDocuments(
+        andFilters(
+          { businessId },
+          ServicesService.NOT_CANCELLED,
+          window,
+          await this.technicianServiceFilter(businessId, viewer),
+        ),
+      )
       .exec();
+  }
+
+  private async reminderQuery(
+    businessId: string,
+    window: Record<string, unknown>,
+    sortField: string,
+    viewer: AuthenticatedBusiness | undefined,
+    limit?: number,
+  ): Promise<ServiceDocument[]> {
+    const query = this.serviceModel
+      .find(
+        andFilters(
+          { businessId },
+          ServicesService.NOT_CANCELLED,
+          window,
+          await this.technicianServiceFilter(businessId, viewer),
+        ),
+      )
+      .sort({ [sortField]: 1 })
+      .populate('customerId')
+      .populate('assignedTechnicianId', 'name');
+    if (limit !== undefined) query.limit(limit);
+    return query.exec();
   }
 
   async uploadPhoto(

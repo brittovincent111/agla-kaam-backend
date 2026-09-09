@@ -47,6 +47,9 @@ export interface RenderBusiness {
   // Payment instructions — every field optional; the block is skipped
   // entirely when a business has set none.
   paymentUpiId?: string;
+  paymentQrContent?: string;
+  paymentQrBuffer?: Buffer;
+  bankDetails?: string;
   paymentBankName?: string;
   paymentAccountNumber?: string;
   paymentAccountCode?: string;
@@ -278,18 +281,25 @@ export interface PaymentLine {
 export function paymentLines(business: RenderBusiness): PaymentLine[] {
   if (business.showPaymentDetailsOnInvoice === false) return [];
   const lines: PaymentLine[] = [];
-  if (business.paymentUpiId) lines.push({ label: 'UPI', value: business.paymentUpiId });
-  if (business.paymentBankName || business.paymentAccountNumber) {
-    const value = [business.paymentBankName, business.paymentAccountNumber]
-      .filter(Boolean)
-      .join(' · ');
-    lines.push({ label: 'Bank', value });
+  if (business.paymentQrContent) {
+    lines.push({ label: 'Pay QR', value: 'Scan QR Code on invoice to pay' });
   }
-  if (business.paymentAccountCode) {
-    lines.push({
-      label: accountCodeLabel(business.country),
-      value: business.paymentAccountCode,
-    });
+  if (business.paymentUpiId) lines.push({ label: 'UPI', value: business.paymentUpiId });
+  if (business.bankDetails) {
+    lines.push({ label: 'Bank', value: business.bankDetails });
+  } else {
+    if (business.paymentBankName || business.paymentAccountNumber) {
+      const value = [business.paymentBankName, business.paymentAccountNumber]
+        .filter(Boolean)
+        .join(' · ');
+      lines.push({ label: 'Bank', value });
+    }
+    if (business.paymentAccountCode) {
+      lines.push({
+        label: accountCodeLabel(business.country),
+        value: business.paymentAccountCode,
+      });
+    }
   }
   if (business.acceptsCash) lines.push({ label: 'Cash', value: 'Accepted' });
   return lines;
@@ -941,23 +951,35 @@ export function drawPaymentBlock(
 ): number {
   const { doc, colors, business } = ctx;
   const lines = paymentLines(business);
-  if (!lines.length) return y;
+  if (!lines.length && !business.paymentQrBuffer) return y;
   const s = opts.scale ?? 1;
 
   let cursor = drawSectionLabel(ctx, 'PAYMENT INFORMATION', x, y, width, opts.labelColor);
+  const textWidth = business.paymentQrBuffer ? width - 75 * s : width;
   lines.forEach((line) => {
     doc
       .font('Helvetica-Bold')
       .fontSize(8.5 * s)
       .fillColor(colors.textSecondary)
-      .text(`${line.label}`, x, cursor, { width: 54 * s });
+      .text(`${line.label}`, x, cursor, { width: 60 * s });
     doc
       .font('Helvetica')
       .fontSize(8.5 * s)
       .fillColor(colors.text)
-      .text(line.value, x + 56 * s, cursor, { width: width - 56 * s });
+      .text(line.value, x + 62 * s, cursor, { width: textWidth - 62 * s });
     cursor = doc.y + 2;
   });
+
+  if (business.paymentQrBuffer) {
+    const qrSize = 65 * s;
+    const qrX = x + width - qrSize;
+    doc.image(business.paymentQrBuffer, qrX, y, {
+      fit: [qrSize, qrSize],
+      align: 'center',
+      valign: 'center',
+    });
+    if (y + qrSize > cursor) cursor = y + qrSize + 4;
+  }
   return cursor;
 }
 
