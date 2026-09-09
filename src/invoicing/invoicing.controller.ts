@@ -1,4 +1,5 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -16,6 +17,7 @@ import {
   DEFAULT_DOCUMENT_TEMPLATE_ID,
   isDocumentTemplateUnlocked,
 } from '../common/pdf/document-templates';
+import { ListInvoicesDto } from './dto/list-invoices.dto';
 
 // Invoicing is an owner-only concern — technicians log services, not money.
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -32,6 +34,23 @@ export class InvoicingController {
   @Post()
   create(@CurrentBusiness() business: AuthenticatedBusiness, @Body() dto: CreateInvoiceDto) {
     return this.invoicingService.create(business.businessId, dto);
+  }
+
+  // Paged, filtered and searched on the server. A separate route from GET
+  // (the unpaged list below) on purpose: that one returns a bare array and is
+  // still what already-installed app versions call, so its shape must not
+  // change under them.
+  //
+  // Above the global 60/min budget — scrolling a long list plus a few
+  // debounced search terms is easily a dozen calls, and using the app
+  // normally must not return "Too Many Requests".
+  @Throttle({ default: { limit: 240, ttl: 60000 } })
+  @Get('page')
+  findPage(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Query() query: ListInvoicesDto,
+  ) {
+    return this.invoicingService.findPageForBusiness(business.businessId, query);
   }
 
   @Get()

@@ -19,6 +19,13 @@ export interface PlayPurchaseVerification {
   productIds: string[];
   orderId?: string;
   needsAcknowledgement: boolean;
+  // When Google says the entitlement actually runs out. The local code used
+  // to assume "one year from now", which drifts from the real renewal date
+  // and, on a renewal, expired a customer who was still being billed.
+  expiresAt?: Date;
+  // SUBSCRIPTION_STATE_CANCELED still grants access until expiry — the user
+  // has turned off auto-renew but paid for the current period.
+  state?: string;
 }
 
 // Talks to the Android Publisher API server-to-server using a service
@@ -95,11 +102,32 @@ export class GooglePlayVerificationService {
       .map((item) => item.productId)
       .filter((id): id is string => Boolean(id));
 
+    // The latest expiry across line items — a plan change can leave more
+    // than one.
+    const expiryTimes = (data.lineItems ?? [])
+      .map((item) => (item as { expiryTime?: string }).expiryTime)
+      .filter((value): value is string => Boolean(value))
+      .map((value) => new Date(value))
+      .filter((date) => !Number.isNaN(date.getTime()));
+    const expiresAt = expiryTimes.length
+      ? new Date(Math.max(...expiryTimes.map((d) => d.getTime())))
+      : undefined;
+
+    const state = data.subscriptionState;
     return {
-      isActive: data.subscriptionState === 'SUBSCRIPTION_STATE_ACTIVE',
+      // A cancelled-but-not-yet-expired subscription is still paid for, so it
+      // still counts as active until its expiry passes.
+      isActive:
+        state === 'SUBSCRIPTION_STATE_ACTIVE' ||
+        state === 'SUBSCRIPTION_STATE_IN_GRACE_PERIOD' ||
+        (state === 'SUBSCRIPTION_STATE_CANCELED' &&
+          !!expiresAt &&
+          expiresAt.getTime() > Date.now()),
       productIds,
       orderId: data.latestOrderId,
       needsAcknowledgement: data.acknowledgementState !== 'ACKNOWLEDGED',
+      expiresAt,
+      state,
     };
   }
 

@@ -17,6 +17,17 @@ import { tierHasUnlimitedCustomers } from '../common/constants/subscription-opti
 import { TeamMembersService } from '../team-members/team-members.service';
 import { ServicesService } from '../services/services.service';
 import type { AuthenticatedBusiness } from '../common/decorators/current-business.decorator';
+import { phoneMatchPatterns } from '../common/utils/phone-match';
+import { idFilter } from '../common/utils/id-match';
+import {
+  DEFAULT_PAGE_SIZE,
+  MAX_PAGE_SIZE,
+  andFilters,
+  cursorFilter,
+  decodeCursor,
+  encodeCursor,
+  searchFilter,
+} from './customer-page';
 
 @Injectable()
 export class CustomersService {
@@ -34,16 +45,18 @@ export class CustomersService {
     businessId: string,
     dto: CreateCustomerDto,
   ): Promise<CustomerDocument> {
-    // The app now sends E.164 ("+919876543210"), but customers added before
-    // that — or through the contact picker — are stored as "9876543210",
-    // "098765 43210" and so on. Matching on the last 10 digits keeps the
-    // duplicate check working across every format already in the collection,
-    // instead of letting the same person be added twice under two spellings.
-    const nationalDigits = dto.phone.replace(/\D/g, '').slice(-10);
-    const existing = nationalDigits
+    // The same person may be stored under several spellings ("9876543210",
+    // "098765 43210", "+919876543210"), so the check is on digits rather than
+    // the literal string. See phoneMatchPatterns for why a non-Indian number
+    // must match on its full digits instead of a 10-digit tail.
+    const patterns = phoneMatchPatterns(dto.phone);
+    const existing = patterns.length
       ? await this.customerModel
-          // nationalDigits is digits-only, so it is safe to interpolate.
-          .findOne({ businessId, phone: { $regex: `${nationalDigits}$` } })
+          // Patterns are digits-only, so they are safe to interpolate.
+          .findOne({
+            businessId,
+            $or: patterns.map((pattern) => ({ phone: { $regex: pattern } })),
+          })
           .exec()
       : null;
     if (existing) {
@@ -93,25 +106,11 @@ export class CustomersService {
     businessId: string,
     viewer: AuthenticatedBusiness,
   ): Promise<CustomerDocument[]> {
-    if (viewer.role !== 'technician') {
-      return this.customerModel.find({ businessId }).sort({ name: 1 }).exec();
-    }
-    const reassignedCustomerIds =
-      await this.servicesService.findAssignedServiceCustomerIds(
-        businessId,
-        viewer.teamMemberId!,
-      );
+    // Same scope object the paged read uses, so the two genuinely cannot
+    // disagree about what a technician is allowed to see.
+    const scope = await this.viewerScope(businessId, viewer);
     return this.customerModel
-      .find({
-        businessId,
-        $or: [
-          // Cast explicitly — a plain string nested inside $or isn't
-          // reliably cast against the schema by Mongoose (verified: it
-          // silently matched nothing when left as a string here).
-          { assignedTechnicianId: new Types.ObjectId(viewer.teamMemberId) },
-          { _id: { $in: reassignedCustomerIds } },
-        ],
-      })
+      .find(andFilters({ businessId }, scope))
       .sort({ name: 1 })
       .exec();
   }
@@ -121,10 +120,134 @@ export class CustomersService {
     teamMemberId: string,
   ): Promise<string[]> {
     const customers = await this.customerModel
-      .find({ businessId, assignedTechnicianId: teamMemberId })
+      .find({ businessId, assignedTechnicianId: idFilter(teamMemberId) })
       .select('_id')
       .exec();
     return customers.map((c) => c.id);
+  }
+
+  // One page of customers, each with a summary of their most recent service.
+  //
+  // The app used to fetch EVERY customer and EVERY service on each visit to
+  // the Customers tab and join them in JavaScript — measured at 10.3 MB for
+  // a 5,000-customer business (1.09 MB of customers, 9.20 MB of services,
+  // the latter because each service populated its whole customer document).
+  // That is downloaded, parsed and held in memory on a low-end phone.
+  //
+  // Here the page is 25 rows, search runs in the database, and the service
+  // summary is fetched for just those 25 customers.
+  async findPageForViewer(
+    businessId: string,
+    viewer: AuthenticatedBusiness,
+    options: { search?: string; limit?: number; cursor?: string },
+  ): Promise<{
+    items: (CustomerDocument & { nextService?: unknown })[];
+    nextCursor: string | null;
+    // Only present on the first page of a result set. The app shows it as the
+    // list's count; later pages omit it rather than pay for the same count
+    // again on every scroll.
+    total?: number;
+  }> {
+    const limit = Math.min(
+      Math.max(options.limit ?? DEFAULT_PAGE_SIZE, 1),
+      MAX_PAGE_SIZE,
+    );
+    const cursor = decodeCursor(options.cursor);
+
+    // andFilters, not object spread: the scope, the search and the cursor are
+    // each a top-level `$or`, and spreading them would keep only the last.
+    const scope = await this.viewerScope(businessId, viewer);
+    const filter: Record<string, unknown> = andFilters(
+      { businessId },
+      scope,
+      searchFilter(options.search),
+      cursorFilter(cursor),
+    );
+
+    // One extra row tells us whether another page exists without a count().
+    // The count is fetched only for the first page, where the app needs a
+    // number to display; it rides the { businessId, name } index.
+    const [rows, total] = await Promise.all([
+      this.customerModel
+        .find(filter)
+        .sort({ name: 1, _id: 1 })
+        .limit(limit + 1)
+        .exec(),
+      cursor
+        ? Promise.resolve(undefined)
+        : this.customerModel.countDocuments(filter).exec(),
+    ]);
+
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+
+    const summaries = await this.servicesService.upcomingServiceSummaries(
+      businessId,
+      page.map((customer) => customer.id as string),
+    );
+
+    const items = page.map((customer) => {
+      const plain = customer.toObject() as CustomerDocument & {
+        nextService?: unknown;
+      };
+      plain.nextService = summaries.get(customer.id as string);
+      return plain;
+    });
+
+    const last = page[page.length - 1];
+    return {
+      items,
+      nextCursor:
+        hasMore && last
+          ? encodeCursor({ name: last.name, id: last.id as string })
+          : null,
+      ...(total === undefined ? {} : { total }),
+    };
+  }
+
+  /**
+   * Ids of customers whose name or phone matches a term, capped.
+   *
+   * Used by the service, invoice and quotation lists: those documents store
+   * only a customer id, so searching them by customer name means resolving
+   * names to ids first. Capped because a term like "kumar" can match the
+   * whole book, and feeding every id in the business into an `$in` is not a
+   * query anyone wants to run — a term that broad is not how someone finds
+   * one job.
+   */
+  async findIdsMatching(
+    businessId: string,
+    search: string,
+    cap: number,
+  ): Promise<string[]> {
+    const term = (search ?? '').trim();
+    if (!term) return [];
+    const rows = await this.customerModel
+      .find(andFilters({ businessId }, searchFilter(term)))
+      .select('_id')
+      .limit(cap)
+      .exec();
+    return rows.map((row) => (row._id as { toString(): string }).toString());
+  }
+
+  // The technician visibility rules, shared by the paged and unpaged reads so
+  // the two can never disagree about what a technician is allowed to see.
+  private async viewerScope(
+    businessId: string,
+    viewer: AuthenticatedBusiness,
+  ): Promise<Record<string, unknown>> {
+    if (viewer.role !== 'technician') return {};
+    const reassignedCustomerIds =
+      await this.servicesService.findAssignedServiceCustomerIds(
+        businessId,
+        viewer.teamMemberId!,
+      );
+    return {
+      $or: [
+        { assignedTechnicianId: idFilter(viewer.teamMemberId!) },
+        { _id: { $in: reassignedCustomerIds } },
+      ],
+    };
   }
 
   async findOne(

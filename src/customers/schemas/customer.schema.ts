@@ -40,3 +40,7 @@ export class Customer {
 }
 
 export const CustomerSchema = SchemaFactory.createForClass(Customer);
+// The customer list is paged in (businessId, name) order — without this the
+// sort is an in-memory operation over every customer the business owns, and
+// MongoDB refuses it outright past 32MB.
+CustomerSchema.index({ businessId: 1, name: 1 });

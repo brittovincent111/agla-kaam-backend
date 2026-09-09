@@ -1,11 +1,11 @@
 import {
   IsIn,
   IsOptional,
-  IsPhoneNumber,
   IsString,
   MaxLength,
   MinLength,
 } from 'class-validator';
+import { IsSupportedPhoneNumber } from '../../common/validators/is-supported-phone-number';
 
 export class CreateCustomerDto {
   @IsString()
@@ -13,7 +13,7 @@ export class CreateCustomerDto {
   @MaxLength(100)
   name: string;
 
-  @IsPhoneNumber('IN')
+  @IsSupportedPhoneNumber()
   phone: string;
 
   @IsOptional()

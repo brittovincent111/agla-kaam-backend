@@ -25,6 +25,20 @@ export class RemindersController {
     private readonly servicePresetsService: ServicePresetsService,
   ) {}
 
+  // One request for the whole dashboard: the four reminder feeds, each capped
+  // to `limit` rows and carrying its true total. Replaces four unpaged calls.
+  @Get('summary')
+  summary(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Query('days') days?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.remindersService.summary(business.businessId, business, {
+      days: days ? Number(days) : undefined,
+      limit: limit ? Number(limit) : undefined,
+    });
+  }
+
   @Get('overdue')
   overdue(@CurrentBusiness() business: AuthenticatedBusiness) {
     return this.remindersService.overdue(business.businessId, business);

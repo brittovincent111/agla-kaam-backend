@@ -61,6 +61,65 @@ export class RemindersService {
     return this.servicesService.findWarrantyAlerts(businessId, expiringBefore, viewer);
   }
 
+  /**
+   * Everything Home needs, capped, in one request.
+   *
+   * Home used to call four unpaged reminder feeds and the customer list —
+   * five round trips, and on a busy business the overdue feed alone was
+   * 482 KB and rendered as several hundred cards, which froze the app. It is
+   * a dashboard: it wants the next few of each kind plus a count, and a way
+   * through to the full list.
+   */
+  async summary(
+    businessId: string,
+    viewer?: AuthenticatedBusiness,
+    options: { days?: number; limit?: number; timezone?: string } = {},
+  ) {
+    const days = options.days ?? 7;
+    const limit = Math.min(Math.max(options.limit ?? 20, 1), 50);
+    const { timezone } = options;
+    const startOfToday = startOfLocalDay(timezone, new Date());
+    const tomorrow = addDays(startOfToday, 1);
+    const soonEnd = addDays(startOfToday, days + 1);
+    const warrantyBefore = addDays(startOfToday, 14);
+
+    const windows = {
+      overdue: { nextServiceDate: { $lt: startOfToday } },
+      dueToday: { nextServiceDate: { $gte: startOfToday, $lt: tomorrow } },
+      dueSoon: { nextServiceDate: { $gte: tomorrow, $lt: soonEnd } },
+      warrantyAlerts: { warrantyExpiry: { $ne: null, $lt: warrantyBefore } },
+    };
+
+    const [
+      overdue,
+      dueToday,
+      dueSoon,
+      warrantyAlerts,
+      overdueTotal,
+      dueTodayTotal,
+      dueSoonTotal,
+      warrantyTotal,
+    ] = await Promise.all([
+      this.servicesService.findOverdue(businessId, startOfToday, viewer, limit),
+      this.servicesService.findDueBetween(businessId, startOfToday, tomorrow, viewer, limit),
+      this.servicesService.findDueBetween(businessId, tomorrow, soonEnd, viewer, limit),
+      this.servicesService.findWarrantyAlerts(businessId, warrantyBefore, viewer, limit),
+      this.servicesService.countReminders(businessId, windows.overdue, viewer),
+      this.servicesService.countReminders(businessId, windows.dueToday, viewer),
+      this.servicesService.countReminders(businessId, windows.dueSoon, viewer),
+      this.servicesService.countReminders(businessId, windows.warrantyAlerts, viewer),
+    ]);
+
+    return {
+      days,
+      limit,
+      overdue: { items: overdue, total: overdueTotal },
+      dueToday: { items: dueToday, total: dueTodayTotal },
+      dueSoon: { items: dueSoon, total: dueSoonTotal },
+      warrantyAlerts: { items: warrantyAlerts, total: warrantyTotal },
+    };
+  }
+
   buildWhatsAppMessage(
     vars: { customerName: string; businessName: string; serviceType: string; nextServiceDate: string },
     template?: string,

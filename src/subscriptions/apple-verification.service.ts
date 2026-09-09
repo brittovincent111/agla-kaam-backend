@@ -23,6 +23,9 @@ export interface ApplePurchaseVerification {
   isActive: boolean;
   transactionId: string;
   productId: string;
+  // Apple's own expiry for the entitlement, so renewalDate reflects the
+  // store rather than a locally guessed "+1 year".
+  expiresAt?: Date;
 }
 
 // Talks to Apple's App Store Server API server-to-server, mirroring
@@ -121,6 +124,35 @@ export class AppleVerificationService {
     );
   }
 
+  // Pulls the transaction id out of an App Store Server Notification V2.
+  //
+  // The notification's JWS signature is deliberately NOT verified here: the
+  // payload is used only to learn *which* transaction changed, and the truth
+  // is then fetched from Apple's own API over an authenticated request (see
+  // verifyTransaction). A forged notification therefore cannot grant
+  // anything — at worst it triggers a redundant lookup.
+  async extractNotificationTransactionId(
+    signedPayload: string,
+  ): Promise<string | null> {
+    try {
+      const { decodeJwt } = await (eval('import("jose")') as Promise<
+        typeof import('jose')
+      >);
+      const payload = decodeJwt(signedPayload) as {
+        data?: { signedTransactionInfo?: string };
+      };
+      const signedTransactionInfo = payload?.data?.signedTransactionInfo;
+      if (!signedTransactionInfo) return null;
+      const info = decodeJwt(signedTransactionInfo) as { transactionId?: string };
+      return info.transactionId ?? null;
+    } catch {
+      // A malformed notification is ignored rather than throwing — Apple
+      // retries, and a 500 here would just invite more retries of something
+      // we can never parse.
+      return null;
+    }
+  }
+
   async verifyTransaction(
     transactionId: string,
   ): Promise<ApplePurchaseVerification> {
@@ -182,6 +214,7 @@ export class AppleVerificationService {
       isActive,
       transactionId: info.transactionId ?? transactionId,
       productId: info.productId ?? '',
+      expiresAt: info.expiresDate ? new Date(info.expiresDate) : undefined,
     };
   }
 }

@@ -115,6 +115,30 @@ export class SubscriptionsController {
     );
   }
 
+  // Google Play Real-time Developer Notifications, delivered by Pub/Sub.
+  //
+  // Unauthenticated by necessity — Google calls it server-to-server. It is
+  // safe because the body is never trusted: it only names a purchase token,
+  // which is then re-verified against the Android Publisher API before
+  // anything is written. Always answers 200 so Pub/Sub does not retry
+  // something we have already decided to ignore.
+  @Post('webhook/play-notification')
+  @HttpCode(200)
+  async handlePlayNotification(@Body() body: unknown) {
+    await this.subscriptionsService.handlePlayRenewalNotification(body);
+    return { received: true };
+  }
+
+  // App Store Server Notifications V2. Same trust model as above: the
+  // signedPayload identifies a transaction, and Apple's own API is then
+  // asked what that transaction's real state is.
+  @Post('webhook/apple-notification')
+  @HttpCode(200)
+  async handleAppleNotification(@Body() body: unknown) {
+    await this.subscriptionsService.handleAppleRenewalNotification(body);
+    return { received: true };
+  }
+
   // Not guarded by JwtAuthGuard: Razorpay calls this server-to-server.
   // The x-razorpay-signature header (verified against the raw body in the
   // service) is what protects it instead.

@@ -10,6 +10,8 @@ import { ServicesModule } from '../services/services.module';
 import { BusinessesModule } from '../businesses/businesses.module';
 import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
 
+import { InventoryModule } from '../inventory/inventory.module';
+
 @Module({
   imports: [
     MongooseModule.forFeature([
@@ -20,6 +22,7 @@ import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
     ServicesModule,
     BusinessesModule,
     SubscriptionsModule,
+    InventoryModule,
   ],
   controllers: [InvoicingController],
   providers: [InvoicingService, InvoicePdfService],

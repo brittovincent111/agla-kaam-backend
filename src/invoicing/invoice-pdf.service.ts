@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import * as QRCode from 'qrcode';
 import { BusinessesService } from '../businesses/businesses.service';
 import { CustomersService } from '../customers/customers.service';
 import { ServicesService } from '../services/services.service';
@@ -75,11 +76,32 @@ export class InvoicePdfService {
       this.resolvePaymentSummary(businessId, invoice),
     ]);
 
-    return this.render(business, customer, invoice, templateId, accentColor, {
-      serviceContext,
-      payment,
-      geometry,
-    });
+    let paymentQrBuffer: Buffer | undefined;
+    const qrText =
+      business.paymentQrContent ||
+      (business.paymentUpiId
+        ? `upi://pay?pa=${business.paymentUpiId}&pn=${encodeURIComponent(business.name)}`
+        : undefined);
+    if (qrText) {
+      try {
+        paymentQrBuffer = await QRCode.toBuffer(qrText, { margin: 1, width: 200 });
+      } catch {
+        // Fallback silently if QR encoding fails
+      }
+    }
+
+    return this.render(
+      { ...business, paymentQrBuffer },
+      customer,
+      invoice,
+      templateId,
+      accentColor,
+      {
+        serviceContext,
+        payment,
+        geometry,
+      },
+    );
   }
 
   // The Compact layout shows who did the work and when the next visit is due.
