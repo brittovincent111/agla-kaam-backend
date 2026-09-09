@@ -10,6 +10,7 @@ import { Service, ServiceDocument } from '../services/schemas/service.schema';
 import { Invoice, InvoiceDocument } from '../invoicing/schemas/invoice.schema';
 import { AppFeedback, AppFeedbackDocument } from '../app-feedback/schemas/app-feedback.schema';
 import { AdminLoginDto } from './dto/admin-login.dto';
+import { isFetchPolyfilled } from '../common/http/fetch-polyfill';
 
 // Estimated yearly price values per tier (in INR)
 const TIER_PRICES_INR: Record<string, number> = {
@@ -355,6 +356,15 @@ export class AdminService {
       data: { type: 'broadcast' },
     }));
 
+    // These lines exist to make a failed broadcast diagnosable from `pm2
+    // logs` alone. Previously the only signal was the error's message in the
+    // HTTP response, with nothing server-side saying which runtime, which
+    // fetch implementation, or what Expo actually replied.
+    console.log(
+      `[broadcast] node=${process.version} fetch=${typeof fetch}` +
+        `${isFetchPolyfilled() ? ' (polyfill)' : ' (native)'} tokens=${tokens.length}`,
+    );
+
     try {
       const response = await fetch('https://exp.host/--/api/v2/push/send', {
         method: 'POST',
@@ -367,12 +377,18 @@ export class AdminService {
       });
 
       const resData = await response.json();
+      console.log(
+        `[broadcast] Expo HTTP ${response.status} -> ${JSON.stringify(resData).slice(0, 500)}`,
+      );
       return {
         message: `Successfully dispatched broadcast push notification to ${tokens.length} devices.`,
         sentCount: tokens.length,
         expoResponse: resData,
       };
     } catch (err: any) {
+      // Log the stack, not just the message: "fetch is not defined" and a
+      // DNS failure look identical in the response body.
+      console.error('[broadcast] FAILED:', err?.stack ?? err);
       return {
         message: `Failed to dispatch push notification: ${err.message}`,
         sentCount: 0,

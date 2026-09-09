@@ -75,8 +75,21 @@ function shimFetch(
 // Called once from main.ts, before anything can issue a request. A no-op on
 // Node 18+, where the real implementation is already there and is preferred.
 export function installFetchPolyfill(): void {
-  if (typeof (globalThis as { fetch?: unknown }).fetch === 'function') return;
+  if (typeof (globalThis as { fetch?: unknown }).fetch === 'function') {
+    console.log('[fetch] native fetch available — polyfill not needed');
+    return;
+  }
   (globalThis as { fetch?: unknown }).fetch = shimFetch;
+  console.log(
+    `[fetch] no native fetch on Node ${process.version} — polyfill INSTALLED`,
+  );
+}
+
+// True when the global fetch is our shim rather than the runtime's own. Used
+// by diagnostics so a log line can state which implementation actually ran,
+// instead of leaving it to be inferred from the Node version.
+export function isFetchPolyfilled(): boolean {
+  return (globalThis as { fetch?: unknown }).fetch === shimFetch;
 }
 
 // Exported for its own test — the shim is only reachable through the global
