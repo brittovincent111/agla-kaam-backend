@@ -103,7 +103,20 @@ export class ServicesService {
       amcId: dto.amcId,
     });
 
-    if (dto.amcId) {
+    // Only a service that actually HAPPENED consumes a contract visit.
+    //
+    // This used to fire for every AMC-linked service, including the pending
+    // ones the "log next visit" form creates. logVisit marks a visit
+    // completed, and since a brand-new service is not yet on the contract's
+    // schedule, it fell through to "mark the first pending visit" — stamping
+    // off the very visit that had just been booked. One real service
+    // therefore burned two visits, and a four-visit contract closed itself
+    // after two.
+    //
+    // Creating an already-completed service is still a real case (a visit
+    // done offline, logged afterwards from the AMC screen), and that one
+    // should count.
+    if (dto.amcId && status === 'completed') {
       await this.amcService.logVisit(
         businessId,
         dto.amcId,

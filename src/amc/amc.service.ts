@@ -55,41 +55,59 @@ export class AmcService {
     for (const amc of activeAmcs) {
       if (!amc.visitSchedule || amc.visitSchedule.length === 0) continue;
 
-      const pendingVisit = amc.visitSchedule.find((v) => v.status === 'pending');
-      if (!pendingVisit) continue;
+      const allPending = amc.visitSchedule.filter((v) => v.status === 'pending');
+      const currentVisit = allPending[0];
+      if (!currentVisit) continue;
 
-      // Check if there is already a Service created for this AMC
-      const existingService = await this.serviceModel
-        .findOne({ businessId, amcId: amc._id })
-        .exec();
+      // Materialise the visit that is due NOW, not "the first visit ever".
+      //
+      // The check used to be "does any service exist for this contract?",
+      // which is true forever once visit 1 is created — so visits 2..N were
+      // never surfaced, no reminder was ever raised for them, and the only
+      // way to move a contract along was the manual "+ Log Visit" button.
+      // Keying off the visit's own serviceId materialises each visit in turn
+      // as the one before it is completed.
+      const nextVisit = allPending.length > 1 ? allPending[1] : null;
+      const title = amc.planName
+        ? `${amc.planName} (${amc.serviceType})`
+        : amc.serviceType;
 
-      if (!existingService) {
-        const title = amc.planName
-          ? `${amc.planName} (${amc.serviceType})`
-          : amc.serviceType;
-
-        const allPending = amc.visitSchedule.filter((v) => v.status === 'pending');
-        const currentVisit = allPending[0];
-        const nextVisit = allPending.length > 1 ? allPending[1] : null;
-
-        const createdService = await this.serviceModel.create({
-          businessId,
-          customerId: amc.customerId,
-          serviceType: title,
-          status: 'pending',
-          serviceDate: currentVisit ? currentVisit.dueDate : (amc.startDate || new Date()),
-          warrantyPeriod: 'none',
-          nextServiceInterval: nextVisit ? 'custom' : 'none',
-          nextServiceDate: nextVisit ? nextVisit.dueDate : (currentVisit ? currentVisit.dueDate : amc.startDate),
-          amcId: amc._id,
-          notes: amc.notes
-            ? `AMC ${amc.contractNumber}: ${amc.notes}`
-            : `AMC ${amc.contractNumber} - Visit #${pendingVisit.visitNumber}`,
-        });
-
-        pendingVisit.serviceId = createdService._id;
-        await amc.save();
+      if (currentVisit.serviceId) {
+        const existingService = await this.serviceModel.findById(currentVisit.serviceId).exec();
+        if (existingService && existingService.status === 'pending') {
+          const expectedDate = currentVisit.dueDate ?? amc.startDate;
+          if (expectedDate && existingService.serviceDate?.getTime() !== expectedDate.getTime()) {
+            existingService.serviceDate = expectedDate;
+            if (nextVisit) {
+              existingService.nextServiceDate = nextVisit.dueDate;
+            }
+            await existingService.save();
+          }
+        }
+        continue;
       }
+
+      const createdService = await this.serviceModel.create({
+        businessId,
+        customerId: amc.customerId,
+        serviceType: title,
+        status: 'pending',
+        // The contract's own schedule decides the date, so reminders follow
+        // what the customer actually bought.
+        serviceDate: currentVisit.dueDate ?? amc.startDate ?? new Date(),
+        warrantyPeriod: 'none',
+        nextServiceInterval: nextVisit ? 'custom' : 'none',
+        nextServiceDate: nextVisit
+          ? nextVisit.dueDate
+          : (currentVisit.dueDate ?? amc.startDate),
+        amcId: amc._id,
+        notes: amc.notes
+          ? `AMC ${amc.contractNumber}: ${amc.notes}`
+          : `AMC ${amc.contractNumber} - Visit #${currentVisit.visitNumber}`,
+      });
+
+      currentVisit.serviceId = createdService._id;
+      await amc.save();
     }
   }
 
@@ -323,22 +341,36 @@ export class AmcService {
       const newTotal = amc.totalVisits;
       const remainingCount = Math.max(0, newTotal - completedCount);
 
-      const baseDate =
-        completedList.length > 0
-          ? new Date(completedList[completedList.length - 1].dueDate)
-          : amc.startDate;
-      const endMs = amc.endDate.getTime();
-      const startMs = baseDate.getTime();
-      const totalMs = Math.max(0, endMs - startMs);
-      const stepMs = remainingCount > 0 ? totalMs / (remainingCount + 1) : 0;
-
       const newPendingSchedule = [];
-      for (let i = 1; i <= remainingCount; i++) {
-        newPendingSchedule.push({
-          visitNumber: completedCount + i,
-          dueDate: new Date(startMs + stepMs * i),
-          status: 'pending' as const,
-        });
+      if (completedCount === 0) {
+        // All visits are pending: visit 1 is at startDate
+        const startMs = amc.startDate.getTime();
+        const endMs = amc.endDate.getTime();
+        const totalMs = Math.max(0, endMs - startMs);
+        const stepMs = remainingCount > 1 ? totalMs / remainingCount : 0;
+
+        for (let i = 0; i < remainingCount; i++) {
+          newPendingSchedule.push({
+            visitNumber: i + 1,
+            dueDate: new Date(startMs + stepMs * i),
+            status: 'pending' as const,
+          });
+        }
+      } else {
+        // Some visits already completed: remaining visits start after last completed visit date
+        const baseDate = new Date(completedList[completedList.length - 1].dueDate);
+        const startMs = baseDate.getTime();
+        const endMs = amc.endDate.getTime();
+        const totalMs = Math.max(0, endMs - startMs);
+        const stepMs = remainingCount > 0 ? totalMs / (remainingCount + 1) : 0;
+
+        for (let i = 1; i <= remainingCount; i++) {
+          newPendingSchedule.push({
+            visitNumber: completedCount + i,
+            dueDate: new Date(startMs + stepMs * i),
+            status: 'pending' as const,
+          });
+        }
       }
 
       amc.visitSchedule = [...completedList, ...newPendingSchedule];
