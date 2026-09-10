@@ -37,6 +37,9 @@ export class Customer {
   // technician visit can reuse it instead of capturing GPS again.
   @Prop({ type: ServiceLocationSchema })
   defaultLocation?: ServiceLocation;
+
+  @Prop({ trim: true, maxlength: 1000 })
+  notes?: string;
 }
 
 export const CustomerSchema = SchemaFactory.createForClass(Customer);

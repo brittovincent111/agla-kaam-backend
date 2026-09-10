@@ -145,6 +145,11 @@ export class ServicesService {
       );
     }
 
+    // No follow-up is raised here on purpose. "Mark complete" closes the job
+    // and nothing else; the next visit is created only when the user chooses
+    // "Complete & log next visit", which goes through the log form so they
+    // can set its date and details. An AMC is the exception — its schedule
+    // raises the next visit itself, via syncAmcServices.
     return saved;
   }
 
@@ -278,7 +283,7 @@ export class ServicesService {
 
     return this.serviceModel
       .find(query)
-      .sort({ nextServiceDate: 1 })
+      .sort({ serviceDate: 1 })
       .populate('customerId')
       .populate('assignedTechnicianId', 'name')
       .exec();
@@ -332,7 +337,7 @@ export class ServicesService {
       options.customerId ? { customerId: idFilter(options.customerId) } : {},
       this.dueWindowFilter(options.due),
       await this.serviceSearchFilter(businessId, options.search),
-      pageCursorFilter(cursor, 'nextServiceDate', 'asc'),
+      pageCursorFilter(cursor, 'serviceDate', 'asc'),
     );
 
     // Soonest due first — this is the upcoming-work tracker, not a history
@@ -341,7 +346,7 @@ export class ServicesService {
     const [rows, total] = await Promise.all([
       this.serviceModel
         .find(filter)
-        .sort(pageSort('nextServiceDate', 'asc'))
+        .sort(pageSort('serviceDate', 'asc'))
         .limit(limit + 1)
         .populate('customerId', 'name phone')
         .populate('assignedTechnicianId', 'name')
@@ -350,7 +355,7 @@ export class ServicesService {
     ]);
 
     return buildPage(rows, limit, (row) => ({
-      v: row.nextServiceDate.toISOString(),
+      v: row.serviceDate.toISOString(),
       id: (row._id as { toString(): string }).toString(),
     }), total);
   }
@@ -363,11 +368,11 @@ export class ServicesService {
     // Server local day, matching how the reminder feeds already bucket dates.
     const startOfToday = startOfLocalDay(undefined, new Date());
     const startOfTomorrow = new Date(startOfToday.getTime() + 86_400_000);
-    if (due === 'overdue') return { nextServiceDate: { $lt: startOfToday } };
+    if (due === 'overdue') return { serviceDate: { $lt: startOfToday } };
     if (due === 'today') {
-      return { nextServiceDate: { $gte: startOfToday, $lt: startOfTomorrow } };
+      return { serviceDate: { $gte: startOfToday, $lt: startOfTomorrow } };
     }
-    return { nextServiceDate: { $gte: startOfTomorrow } };
+    return { serviceDate: { $gte: startOfTomorrow } };
   }
 
   // Matches the service type, and the customer's name via a bounded id lookup
@@ -479,7 +484,7 @@ export class ServicesService {
     const rows = await this.serviceModel
       .find({ businessId, customerId: idsFilter(customerIds) })
       .select('customerId serviceType serviceDate nextServiceDate warrantyExpiry')
-      .sort({ nextServiceDate: 1 })
+      .sort({ serviceDate: 1 })
       .exec();
 
     for (const row of rows) {
@@ -512,8 +517,8 @@ export class ServicesService {
     await this.amcService.syncAmcServices(businessId);
     return this.reminderQuery(
       businessId,
-      { nextServiceDate: { $gte: from, $lt: to } },
-      'nextServiceDate',
+      { serviceDate: { $gte: from, $lt: to } },
+      'serviceDate',
       viewer,
       limit,
     );
@@ -528,8 +533,8 @@ export class ServicesService {
     await this.amcService.syncAmcServices(businessId);
     return this.reminderQuery(
       businessId,
-      { nextServiceDate: { $lt: before } },
-      'nextServiceDate',
+      { serviceDate: { $lt: before } },
+      'serviceDate',
       viewer,
       limit,
     );

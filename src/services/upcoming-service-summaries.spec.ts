@@ -79,9 +79,12 @@ describe('ServicesService.upcomingServiceSummaries', () => {
     expect(summaries.get('c1')?.serviceType).toBe('AC General Service');
   });
 
-  it('sorts by nextServiceDate ascending, so the first row per customer wins', async () => {
+  // A pending service is work due on its own serviceDate — that is what the
+  // lists, the due chips and the reminder feeds all bucket on now, so the
+  // per-customer summary has to agree or Home would disagree with itself.
+  it('sorts by serviceDate ascending, so the first row per customer wins', async () => {
     await service.upcomingServiceSummaries(businessId, ['c1']);
-    expect(sort).toHaveBeenCalledWith({ nextServiceDate: 1 });
+    expect(sort).toHaveBeenCalledWith({ serviceDate: 1 });
   });
 
   it('keeps one entry per customer', async () => {
