@@ -76,11 +76,15 @@ export class AmcService {
         const existingService = await this.serviceModel.findById(currentVisit.serviceId).exec();
         if (existingService && existingService.status === 'pending') {
           const expectedDate = currentVisit.dueDate ?? amc.startDate;
-          if (expectedDate && existingService.serviceDate?.getTime() !== expectedDate.getTime()) {
+          const needsDateFix =
+            expectedDate &&
+            (existingService.serviceDate?.getTime() !== expectedDate.getTime() ||
+             existingService.nextServiceDate?.getTime() !== expectedDate.getTime());
+          if (needsDateFix) {
             existingService.serviceDate = expectedDate;
-            if (nextVisit) {
-              existingService.nextServiceDate = nextVisit.dueDate;
-            }
+            // nextServiceDate must be THIS visit's due date so the Services
+            // screen shows the correct "Due …" label and overdue bucketing.
+            existingService.nextServiceDate = expectedDate;
             await existingService.save();
           }
         }
@@ -96,10 +100,13 @@ export class AmcService {
         // what the customer actually bought.
         serviceDate: currentVisit.dueDate ?? amc.startDate ?? new Date(),
         warrantyPeriod: 'none',
+        // nextServiceDate drives the Services screen (sorting, overdue/due-
+        // today/upcoming bucketing, and the displayed "Due …" label).  It must
+        // be THIS visit's own due date so the service appears at the right
+        // time — not the subsequent visit's date, which would hide the first
+        // visit from the list entirely and show the wrong due date.
         nextServiceInterval: nextVisit ? 'custom' : 'none',
-        nextServiceDate: nextVisit
-          ? nextVisit.dueDate
-          : (currentVisit.dueDate ?? amc.startDate),
+        nextServiceDate: currentVisit.dueDate ?? amc.startDate ?? new Date(),
         amcId: amc._id,
         notes: amc.notes
           ? `AMC ${amc.contractNumber}: ${amc.notes}`

@@ -66,6 +66,14 @@ describe('AMC visit accounting', () => {
         Promise.resolve({ ...doc, _id: new Types.ObjectId() }),
       ),
       findOne: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue(null) }),
+      findById: jest.fn().mockImplementation(() => ({
+        exec: jest.fn().mockResolvedValue({
+          status: 'pending',
+          serviceDate: new Date(2026, 0, 1),
+          nextServiceDate: new Date(2026, 0, 1),
+          save: jest.fn().mockResolvedValue(undefined),
+        }),
+      })),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -142,6 +150,10 @@ describe('AMC visit accounting', () => {
       expect(created.status).toBe('pending');
       // Dated from the contract, so reminders follow what was actually sold.
       expect(created.serviceDate).toEqual(amc.visitSchedule[0].dueDate);
+      // nextServiceDate must be THIS visit's own due date — the Services
+      // screen sorts and displays by it, so the wrong value hides the
+      // visit or shows the wrong "Due …" label.
+      expect(created.nextServiceDate).toEqual(amc.visitSchedule[0].dueDate);
       expect(amc.visitSchedule[0].serviceId).toBeDefined();
     });
 
