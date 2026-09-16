@@ -131,10 +131,31 @@ export class ServicesService {
     businessId: string,
     serviceId: string,
     viewer: AuthenticatedBusiness,
+    location?: { latitude: number; longitude: number },
   ): Promise<ServiceDocument> {
     const service = await this.findOne(businessId, serviceId, viewer);
     service.status = 'completed';
     service.completedAt = new Date();
+
+    // Completing is the one moment a live GPS read is trustworthy — the
+    // technician is at the door. Only fills a gap: a pin already captured
+    // when the job was logged is the more deliberate record and wins.
+    if (location && !service.location) {
+      const captured = {
+        latitude: location.latitude,
+        longitude: location.longitude,
+        capturedAt: new Date(),
+      };
+      service.location = captured;
+      // Cached on the customer too, so every future visit inherits it and
+      // "Use saved location from last visit" works — same as the log path.
+      await this.customersService.setDefaultLocation(
+        businessId,
+        service.customerId.toString(),
+        captured,
+      );
+    }
+
     const saved = await service.save();
 
     if (service.amcId) {
@@ -151,6 +172,38 @@ export class ServicesService {
     // can set its date and details. An AMC is the exception — its schedule
     // raises the next visit itself, via syncAmcServices.
     return saved;
+  }
+
+  /**
+   * Pins where the job is, from the service card.
+   *
+   * Separate from create and complete because that is the moment a
+   * technician is actually standing at the door — the log form can only
+   * offer a live GPS read while a visit is being *scheduled*, which is
+   * usually from the office.
+   *
+   * Overwrites an existing pin: someone tapping this is correcting it.
+   */
+  async setServiceLocation(
+    businessId: string,
+    serviceId: string,
+    viewer: AuthenticatedBusiness,
+    location: { latitude: number; longitude: number },
+  ): Promise<ServiceDocument> {
+    const service = await this.findOne(businessId, serviceId, viewer);
+    const captured = {
+      latitude: location.latitude,
+      longitude: location.longitude,
+      capturedAt: new Date(),
+    };
+    service.location = captured;
+    // The customer default is what makes every FUTURE visit navigable.
+    await this.customersService.setDefaultLocation(
+      businessId,
+      service.customerId.toString(),
+      captured,
+    );
+    return service.save();
   }
 
   async revisitService(

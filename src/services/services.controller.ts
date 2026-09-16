@@ -26,6 +26,8 @@ import { ServicesService } from './services.service';
 import { CreateServiceDto } from './dto/create-service.dto';
 import { ListServicesDto } from './dto/list-services.dto';
 import { RescheduleServiceDto } from './dto/reschedule-service.dto';
+import { CompleteServiceDto } from './dto/complete-service.dto';
+import { ServiceLocationDto } from './dto/service-location.dto';
 
 // Ceiling on a customer's service history in one response. Well past what
 // any real customer accumulates, and it keeps the endpoint bounded.
@@ -97,8 +99,28 @@ export class ServicesController {
   complete(
     @CurrentBusiness() business: AuthenticatedBusiness,
     @Param('id') id: string,
+    @Body() dto: CompleteServiceDto,
   ) {
-    return this.servicesService.completeService(business.businessId, id, business);
+    return this.servicesService.completeService(
+      business.businessId,
+      id,
+      business,
+      dto?.location,
+    );
+  }
+
+  @Patch(':id/location')
+  setLocation(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+    @Body() dto: ServiceLocationDto,
+  ) {
+    return this.servicesService.setServiceLocation(
+      business.businessId,
+      id,
+      business,
+      dto,
+    );
   }
 
   @Patch(':id/revisit')

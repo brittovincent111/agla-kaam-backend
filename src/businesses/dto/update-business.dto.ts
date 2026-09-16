@@ -50,6 +50,11 @@ export class UpdateBusinessDto {
   @MaxLength(15)
   gstin?: string;
 
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  googleReviewUrl?: string;
+
   // Drives subscription pricing (see SubscriptionsService.createOrder) —
   // restricted to the countries pricing actually exists for, rather than any
   // 2-character string, since an unrecognized code would otherwise silently

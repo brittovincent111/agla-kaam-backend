@@ -180,6 +180,12 @@ export class Business {
   @Prop({ trim: true })
   pushToken?: string;
 
+  // Optional link to the business's Google Review page or Google Maps listing
+  // (e.g. https://g.page/r/.../review). When configured, this is automatically
+  // appended to completed service card records shared on WhatsApp.
+  @Prop({ trim: true, maxlength: 500 })
+  googleReviewUrl?: string;
+
   // S3 object key holding the actual image bytes (bucket: S3_BUCKET env) —
   // select:false so a normal /businesses/me fetch never needs these; the
   // dedicated /businesses/me/logo endpoint looks them up to stream from S3.

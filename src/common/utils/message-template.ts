@@ -31,9 +31,7 @@ export const DEFAULT_CARD_TEMPLATE = [
   '{completedLine}{warranty}',
   'Next service due: {nextServiceDate}',
   '',
-  '{businessContact}',
-  '',
-  'Would you like to schedule your next visit?',
+  '{businessContact}{reviewLine}',
 ].join('\n');
 
 // Unknown {placeholders} are left as-is rather than blanked out, so a typo in

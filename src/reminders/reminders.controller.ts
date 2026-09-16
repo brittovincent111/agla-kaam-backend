@@ -179,6 +179,11 @@ export class RemindersController {
           ? 'Completed'
           : 'Pending';
 
+    const reviewLine =
+      service.status === 'completed' && businessDoc.googleReviewUrl?.trim()
+        ? `\n\n⭐ Enjoyed our service? Please leave us a Google review:\n${businessDoc.googleReviewUrl.trim()}`
+        : '';
+
     const message = this.remindersService.buildServiceCardMessage(
       {
         customerName: customer.name,
@@ -200,6 +205,7 @@ export class RemindersController {
         businessContact: businessDoc.phone
           ? `${businessDoc.name} — ${businessDoc.phone}`
           : businessDoc.name,
+        reviewLine,
       },
       businessDoc.serviceCardTemplate,
     );

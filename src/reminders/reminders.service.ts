@@ -167,10 +167,14 @@ export class RemindersService {
       warranty: string;
       nextServiceDate: string;
       businessContact: string;
+      reviewLine?: string;
     },
     template?: string,
   ): string {
-    return renderMessageTemplate(template?.trim() || DEFAULT_CARD_TEMPLATE, vars);
+    return renderMessageTemplate(template?.trim() || DEFAULT_CARD_TEMPLATE, {
+      ...vars,
+      reviewLine: vars.reviewLine ?? '',
+    });
   }
 
   // The invoice chase. Same renderer and override mechanism as the two
