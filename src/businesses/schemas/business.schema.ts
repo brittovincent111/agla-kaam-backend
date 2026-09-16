@@ -128,6 +128,16 @@ export class Business {
   @Prop({ trim: true, maxlength: 2000 })
   defaultInvoiceTerms?: string;
 
+  // Overrides DEFAULT_CARD_TEMPLATE for the service-card share. Business-wide
+  // rather than per-preset like ServicePreset.messageTemplate: the reminder
+  // varies by service type, but the record format does not.
+  @Prop({ trim: true, maxlength: 2000 })
+  serviceCardTemplate?: string;
+
+  // Overrides DEFAULT_PAYMENT_REMINDER_TEMPLATE for the invoice chase.
+  @Prop({ trim: true, maxlength: 2000 })
+  paymentReminderTemplate?: string;
+
   @Prop({ trim: true, maxlength: 2000 })
   defaultQuotationTerms?: string;
 

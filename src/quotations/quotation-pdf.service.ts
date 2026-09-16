@@ -15,6 +15,8 @@ import {
   RenderStatus,
   RenderTotalRow,
   buildTaxRows,
+  applyPaymentVisibility,
+  toRenderItems,
   formatDate,
   taxTypeName,
 } from '../common/pdf/document-render';
@@ -32,6 +34,18 @@ const STATUS_LABELS: Record<string, RenderStatus> = {
   rejected: { label: 'REJECTED', tone: 'danger' },
   converted: { label: 'CONVERTED', tone: 'positive' },
   cancelled: { label: 'CANCELLED', tone: 'neutral' },
+};
+
+// Declared locally for the same reason as InvoiceRenderBusiness: the shared
+// RenderBusiness stays free of per-document-type setting names. All optional,
+// and undefined means "show".
+type QuotationRenderBusiness = RenderBusiness & {
+  quotationShowTax?: boolean;
+  quotationShowBankInfo?: boolean;
+  quotationShowUpiInfo?: boolean;
+  quotationShowSignature?: boolean;
+  quotationBottomMessage?: string;
+  quotationShowHsn?: boolean;
 };
 
 @Injectable()
@@ -67,7 +81,7 @@ export class QuotationPdfService {
   // Split out from generate() so preview rendering (fixed sample data, no
   // customer lookup) can share the same drawing code.
   render(
-    business: RenderBusiness,
+    business: QuotationRenderBusiness,
     customer: RenderCustomer,
     quotation: Quotation,
     templateId?: DocumentTemplateId,
@@ -93,7 +107,12 @@ export class QuotationPdfService {
     if (quotation.discount > 0) {
       totals.push({ label: 'Discount', value: quotation.discount, negative: true });
     }
-    totals.push(...buildTaxRows(taxType, quotation.taxTotal, quotation.items));
+    // No quotationShowDiscount setting exists, so the discount row above is
+    // always shown when there is one.
+    const showTax = business.quotationShowTax !== false;
+    if (showTax) {
+      totals.push(...buildTaxRows(taxType, quotation.taxTotal, quotation.items));
+    }
     totals.push({
       label: 'Total',
       value: quotation.total,
@@ -109,7 +128,7 @@ export class QuotationPdfService {
       recipientLabel: 'QUOTED TO',
       status: STATUS_LABELS[quotation.status] ?? STATUS_LABELS.draft,
       metaRows,
-      items: quotation.items,
+      items: toRenderItems(quotation.items),
       totals,
       grandTotal: quotation.total,
       notes: quotation.notes,
@@ -117,11 +136,27 @@ export class QuotationPdfService {
       currency,
       taxType,
       country,
-      footerNote: `Thank you for the opportunity — ${business.name}`,
-      hasTax: taxType !== 'none' && quotation.items.some((item) => item.taxRate > 0),
+      footerNote:
+        business.quotationBottomMessage?.trim() ||
+        `Thank you for the opportunity — ${business.name}`,
+      hasTax:
+        showTax && taxType !== 'none' && quotation.items.some((item) => item.taxRate > 0),
       taxLabel: taxTypeName(taxType),
+      show: {
+        signature: business.quotationShowSignature !== false,
+        hsn: business.quotationShowHsn === true,
+      },
     };
 
-    return renderDocument(business, customer, spec, theme, geometry);
+    return renderDocument(
+      applyPaymentVisibility(business, {
+        bank: business.quotationShowBankInfo !== false,
+        upi: business.quotationShowUpiInfo !== false,
+      }),
+      customer,
+      spec,
+      theme,
+      geometry,
+    );
   }
 }

@@ -184,6 +184,13 @@ export class AmcService {
   }
 
   async findOnePopulated(businessId: string, amcId: string): Promise<AmcDocument> {
+    // Materialise before reading, so the contract screen shows the same
+    // state as every other screen. Completing a visit leaves the next one
+    // pending with no service yet; the sync ran on the services and list
+    // queries but not here, so coming straight back to the contract showed
+    // "+ Log Visit" for a visit that was about to get its own service —
+    // and only corrected itself once some other screen triggered the sync.
+    await this.syncAmcServices(businessId);
     const amc = await this.findOne(businessId, amcId);
     await amc.populate('customerId');
     return amc;

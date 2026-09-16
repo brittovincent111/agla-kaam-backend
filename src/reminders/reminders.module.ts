@@ -6,6 +6,7 @@ import { ServicesModule } from '../services/services.module';
 import { CustomersModule } from '../customers/customers.module';
 import { BusinessesModule } from '../businesses/businesses.module';
 import { ServicePresetsModule } from '../service-presets/service-presets.module';
+import { InvoicingModule } from '../invoicing/invoicing.module';
 import { TeamMembersModule } from '../team-members/team-members.module';
 import { ExpoPushService } from '../common/push/expo-push.service';
 import {
@@ -22,6 +23,7 @@ import {
     CustomersModule,
     BusinessesModule,
     ServicePresetsModule,
+    InvoicingModule,
     TeamMembersModule,
   ],
   controllers: [RemindersController],

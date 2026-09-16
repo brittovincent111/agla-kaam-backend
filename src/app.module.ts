@@ -24,6 +24,7 @@ import { AdminModule } from './admin/admin.module';
 import { AmcModule } from './amc/amc.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { PurchasesModule } from './purchases/purchases.module';
+import { SuppliersModule } from './suppliers/suppliers.module';
 import { ProformaInvoicesModule } from './proforma-invoices/proforma-invoices.module';
 import { validate } from './env.validation';
 
@@ -74,6 +75,7 @@ import { validate } from './env.validation';
     AmcModule,
     InventoryModule,
     PurchasesModule,
+    SuppliersModule,
     ProformaInvoicesModule,
   ],
   controllers: [HealthController],

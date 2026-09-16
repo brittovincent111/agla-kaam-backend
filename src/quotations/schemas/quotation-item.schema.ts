@@ -14,6 +14,11 @@ export class QuotationItem {
   @Prop({ trim: true, maxlength: 300 })
   description?: string;
 
+  // Copied from the inventory item at add time, so a quotation keeps the
+  // code it was issued with even if inventory changes later.
+  @Prop({ trim: true, uppercase: true, maxlength: 20 })
+  hsnCode?: string;
+
   @Prop({ required: true, min: 0.01 })
   quantity: number;
 

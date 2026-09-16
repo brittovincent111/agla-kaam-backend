@@ -97,6 +97,7 @@ export class InvoicingService {
           serviceId: item.serviceId,
           name: item.name,
           description: item.description,
+          hsnCode: item.hsnCode,
           quantity: item.quantity,
           rate: item.rate,
           taxRate,

@@ -59,6 +59,31 @@ function contactLines(ctx: Ctx): string[] {
 // Item columns, adapted to the invoice: the tax column disappears entirely on
 // a zero-tax invoice rather than printing a column of "0%". Currency is named
 // once in the column header so cells stay narrow.
+// Both the column and the cell need the same answer, and getting them out of
+// step would shift every cell one column to the left.
+function hasHsn(ctx: Ctx): boolean {
+  return (
+    ctx.spec.show?.hsn === true &&
+    ctx.spec.items.some((item: RenderItem) => !!item.hsn)
+  );
+}
+
+// Whether HSN gets its own column, or goes under the item name instead.
+//
+// A layout already carrying both TAX and TAX AMT has six fixed columns, and
+// an eighth leaves the flexible name column so narrow that a long item name
+// wraps over enough lines to push the invoice onto a second page. Measured:
+// with HSN as a column the Bold template went 1 -> 2 pages on a three-line
+// invoice, and narrowing the column to 40pt did not help because the cost is
+// the wrapping, not the column. Under the name it costs no width at all.
+function hsnAsColumn(
+  ctx: Ctx,
+  opts: { tax?: boolean; taxAmount?: boolean },
+): boolean {
+  if (!hasHsn(ctx)) return false;
+  return !(opts.tax && opts.taxAmount && ctx.spec.hasTax);
+}
+
 function itemColumns(
   ctx: Ctx,
   opts: { index?: boolean; tax?: boolean; taxAmount?: boolean; label?: string } = {},
@@ -68,10 +93,21 @@ function itemColumns(
   if (opts.index) cols.push({ key: 'index', label: '#', align: 'left', width: 30 });
   cols.push({
     key: 'name',
-    label: opts.label ?? 'SERVICE / ITEM',
+    label: ctx.spec.itemLabel ?? opts.label ?? 'SERVICE / ITEM',
     align: 'left',
     flex: 1,
   });
+  // HSN sits immediately after the item name, where a reader looks for a
+  // code. Shown only when the business asked for it AND at least one line
+  // actually carries one — the same rule the tax column follows, so a
+  // business that switched it on but has no codes saved does not get a
+  // column of dashes eating the description's width.
+  if (hsnAsColumn(ctx, opts)) {
+    // 72pt, not less: a GST code runs to 8 digits and at 62pt the last
+    // digit wrapped onto its own line ("8415900" over "0"), which reads as a
+    // corrupted code rather than a narrow column.
+    cols.push({ key: 'hsn', label: 'HSN/SAC', align: 'left', width: 72 });
+  }
   cols.push({ key: 'qty', label: 'QTY', align: 'right', width: 40 });
   cols.push({ key: 'rate', label: 'RATE (' + code + ')', align: 'right', width: 82 });
   if (opts.tax && ctx.spec.hasTax) {
@@ -86,13 +122,26 @@ function itemColumns(
   return cols;
 }
 
-function itemRows(ctx: Ctx): TableRowContent[] {
+function itemRows(
+  ctx: Ctx,
+  opts: { index?: boolean; tax?: boolean; taxAmount?: boolean } = {},
+): TableRowContent[] {
   const { spec } = ctx;
+  // Same predicate as the header, so the cells can never sit under the wrong
+  // column. Where the code does not get a column it rides above the
+  // description, which is where a reader of a dense invoice looks for it.
+  const asColumn = hsnAsColumn(ctx, opts);
+  const inline = hasHsn(ctx) && !asColumn;
   return spec.items.map((item: RenderItem, i: number) => ({
-    description: item.description,
+    description: inline
+      ? [item.hsn ? 'HSN/SAC: ' + item.hsn : null, item.description]
+          .filter(Boolean)
+          .join('\n') || undefined
+      : item.description,
     cells: {
       index: String(i + 1),
       name: item.name,
+      hsn: item.hsn ?? '—',
       qty: String(item.quantity),
       rate: formatAmount(item.rate, spec.currency),
       taxRate: item.taxRate ? Number(item.taxRate.toFixed(2)) + '%' : '—',
@@ -264,18 +313,24 @@ const classic: LayoutDefinition = {
     );
 
     const rightX = x + colW + 34;
-    let rightEnd = drawSectionLabel(ctx, 'SERVICE ADDRESS', rightX, y, colW);
-    doc.font('Helvetica').fontSize(9).fillColor(colors.textSecondary);
-    // The app keeps one address per customer, and for a field-service call it
-    // is where the work happens — so this states that rather than reprinting
-    // the same lines under a second heading.
-    doc.text(
-      customer.address ? 'Same as billing address' : 'Not recorded',
-      rightX,
-      rightEnd,
-      { width: colW },
-    );
-    rightEnd = doc.y + 4;
+    // A purchase order is addressed to a supplier and has no service address;
+    // drawing the block anyway printed "SERVICE ADDRESS / Not recorded" on
+    // every PO.
+    let rightEnd = y;
+    if (spec.show?.serviceAddress !== false) {
+      rightEnd = drawSectionLabel(ctx, 'SERVICE ADDRESS', rightX, y, colW);
+      doc.font('Helvetica').fontSize(9).fillColor(colors.textSecondary);
+      // The app keeps one address per customer, and for a field-service call
+      // it is where the work happens — so this states that rather than
+      // reprinting the same lines under a second heading.
+      doc.text(
+        customer.address ? 'Same as billing address' : 'Not recorded',
+        rightX,
+        rightEnd,
+        { width: colW },
+      );
+      rightEnd = doc.y + 4;
+    }
     if (spec.paymentTerms) {
       rightEnd = drawSectionLabel(ctx, 'PAYMENT TERMS', rightX, rightEnd + 6, colW);
       doc
@@ -289,7 +344,7 @@ const classic: LayoutDefinition = {
     canvas.y = Math.max(leftEnd, rightEnd) + 20;
 
     // --- Items ----------------------------------------------------------
-    drawTable(ctx, itemColumns(ctx, { index: true, tax: true }), itemRows(ctx), {
+    drawTable(ctx, itemColumns(ctx, { index: true, tax: true }), itemRows(ctx, { index: true, tax: true }), {
       ...DEFAULT_TABLE_STYLE,
       headerFill: 'tint',
     });
@@ -861,7 +916,7 @@ const formal: LayoutDefinition = {
     drawTable(
       ctx,
       itemColumns(ctx, { index: true, tax: true, taxAmount: true, label: 'DESCRIPTION' }),
-      itemRows(ctx),
+      itemRows(ctx, { index: true, tax: true, taxAmount: true }),
       {
         ...DEFAULT_TABLE_STYLE,
         cellPadX: 7,
@@ -1005,11 +1060,13 @@ const compact: LayoutDefinition = {
         label: 'CUSTOMER',
         lines: [customer.name, customer.phone].filter(Boolean) as string[],
       },
-      {
+    ];
+    if (spec.show?.serviceAddress !== false) {
+      cells.push({
         label: 'SERVICE ADDRESS',
         lines: [customer.address ?? 'Not recorded'],
-      },
-    ];
+      });
+    }
     const jobLines: string[] = [];
     if (svc?.technicianName) jobLines.push(svc.technicianName);
     if (svc?.jobReference) jobLines.push('Job ' + svc.jobReference);
@@ -1057,7 +1114,7 @@ const compact: LayoutDefinition = {
     canvas.y = y + rowH + 12;
 
     // --- Dense items ----------------------------------------------------
-    drawTable(ctx, itemColumns(ctx, { index: true }), itemRows(ctx), {
+    drawTable(ctx, itemColumns(ctx, { index: true }), itemRows(ctx, { index: true }), {
       ...DEFAULT_TABLE_STYLE,
       scale: s,
       cellPadX: 8,

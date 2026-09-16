@@ -1,4 +1,15 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
+import { Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { PurchasesService } from './purchases.service';
 import { CreatePurchaseDto } from './dto/create-purchase.dto';
@@ -8,11 +19,78 @@ import {
   CurrentBusiness,
 } from '../common/decorators/current-business.decorator';
 import { ListPurchasesDto } from './dto/list-purchases.dto';
+import { RecordPurchasePaymentDto } from './dto/record-purchase-payment.dto';
+import { PurchasePdfService } from './purchase-pdf.service';
+import { BusinessesService } from '../businesses/businesses.service';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service';
+import {
+  isCustomAccentUnlocked,
+  DEFAULT_DOCUMENT_TEMPLATE_ID,
+  isDocumentTemplateUnlocked,
+} from '../common/pdf/document-templates';
 
 @Controller('purchases')
 @UseGuards(JwtAuthGuard)
 export class PurchasesController {
-  constructor(private readonly purchasesService: PurchasesService) {}
+  constructor(
+    private readonly purchasesService: PurchasesService,
+    private readonly purchasePdfService: PurchasePdfService,
+    private readonly businessesService: BusinessesService,
+    private readonly subscriptionsService: SubscriptionsService,
+  ) {}
+
+  // What the business owes each supplier. Declared before the ":id" routes
+  // so "payables" is not swallowed as a purchase id.
+  @Get('payables')
+  payables(@CurrentBusiness() business: AuthenticatedBusiness) {
+    return this.purchasesService.payablesBySupplier(business.businessId);
+  }
+
+  @Patch(':id/payment')
+  recordPayment(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+    @Body() dto: RecordPurchasePaymentDto,
+  ) {
+    return this.purchasesService.recordPayment(
+      business.businessId,
+      id,
+      dto.amount,
+    );
+  }
+
+  // Same template/accent gating as the invoice download: a locked template
+  // silently falls back to the default rather than rendering something the
+  // plan does not include.
+  @Get(':id/pdf')
+  async downloadPdf(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+    @Res() res: Response,
+  ) {
+    const [purchase, biz, tier] = await Promise.all([
+      this.purchasesService.findOne(business.businessId, id),
+      this.businessesService.findById(business.businessId),
+      this.subscriptionsService.getActiveTier(business.businessId),
+    ]);
+    const templateId = isDocumentTemplateUnlocked(biz.invoiceTemplateId, tier)
+      ? biz.invoiceTemplateId
+      : DEFAULT_DOCUMENT_TEMPLATE_ID;
+    const accentColor = isCustomAccentUnlocked(tier)
+      ? biz.documentAccentColor ?? null
+      : null;
+    const buffer = await this.purchasePdfService.generate(
+      business.businessId,
+      purchase as never,
+      templateId,
+      accentColor,
+    );
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="${purchase.purchaseNumber}.pdf"`,
+    });
+    res.send(buffer);
+  }
 
   @Post()
   create(

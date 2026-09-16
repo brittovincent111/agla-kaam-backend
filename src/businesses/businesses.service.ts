@@ -70,6 +70,31 @@ export interface BusinessWithBranding {
   paymentAccountCode?: string;
   acceptsCash?: boolean;
   showPaymentDetailsOnInvoice?: boolean;
+  // Per-document display settings. This interface is an explicit whitelist
+  // and the PDF services read these off it — a flag missing here silently
+  // arrives as undefined at render time, which reads as "show" and makes the
+  // setting look like it does nothing.
+  invoiceShowDiscount?: boolean;
+  invoiceShowTax?: boolean;
+  invoiceShowHsn?: boolean;
+  invoiceShowBankInfo?: boolean;
+  invoiceShowUpiInfo?: boolean;
+  invoiceBottomMessage?: string;
+  quotationShowTax?: boolean;
+  quotationShowHsn?: boolean;
+  quotationShowBankInfo?: boolean;
+  quotationShowUpiInfo?: boolean;
+  quotationShowSignature?: boolean;
+  quotationBottomMessage?: string;
+  proformaShowDiscount?: boolean;
+  proformaShowTax?: boolean;
+  proformaShowHsn?: boolean;
+  proformaShowBankInfo?: boolean;
+  proformaShowUpiInfo?: boolean;
+  proformaBottomMessage?: string;
+  purchaseShowHsn?: boolean;
+  purchaseShowBankInfo?: boolean;
+  purchaseBottomMessage?: string;
 }
 
 const IMAGE_EXTENSIONS: Record<string, string> = {
@@ -323,6 +348,27 @@ export class BusinessesService implements OnModuleInit {
       paymentAccountCode: business.paymentAccountCode,
       acceptsCash: business.acceptsCash,
       showPaymentDetailsOnInvoice: business.showPaymentDetailsOnInvoice,
+      invoiceShowDiscount: business.invoiceShowDiscount,
+      invoiceShowTax: business.invoiceShowTax,
+      invoiceShowHsn: business.invoiceShowHsn,
+      invoiceShowBankInfo: business.invoiceShowBankInfo,
+      invoiceShowUpiInfo: business.invoiceShowUpiInfo,
+      invoiceBottomMessage: business.invoiceBottomMessage,
+      quotationShowTax: business.quotationShowTax,
+      quotationShowHsn: business.quotationShowHsn,
+      quotationShowBankInfo: business.quotationShowBankInfo,
+      quotationShowUpiInfo: business.quotationShowUpiInfo,
+      quotationShowSignature: business.quotationShowSignature,
+      quotationBottomMessage: business.quotationBottomMessage,
+      proformaShowDiscount: business.proformaShowDiscount,
+      proformaShowTax: business.proformaShowTax,
+      proformaShowHsn: business.proformaShowHsn,
+      proformaShowBankInfo: business.proformaShowBankInfo,
+      proformaShowUpiInfo: business.proformaShowUpiInfo,
+      proformaBottomMessage: business.proformaBottomMessage,
+      purchaseShowHsn: business.purchaseShowHsn,
+      purchaseShowBankInfo: business.purchaseShowBankInfo,
+      purchaseBottomMessage: business.purchaseBottomMessage,
     };
   }
 

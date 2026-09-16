@@ -11,6 +11,12 @@ export class PurchaseItem {
   @Prop({ required: true, trim: true })
   name: string;
 
+  // Copied from the inventory item at add time. A document is a historical
+  // record — re-reading the code from inventory later would silently rewrite
+  // an invoice that has already been sent.
+  @Prop({ trim: true, uppercase: true, maxlength: 20 })
+  hsnCode?: string;
+
   @Prop({ required: true, min: 1 })
   quantity: number;
 
@@ -30,6 +36,12 @@ export class Purchase {
 
   @Prop({ required: true, trim: true })
   purchaseNumber: string;
+
+  // Links to the supplier book. Optional, and the name/phone below stay
+  // denormalised alongside it: a supplier can be renamed or deleted later,
+  // and a logged purchase must keep showing who it was actually with.
+  @Prop({ type: Types.ObjectId, ref: 'Supplier', index: true })
+  supplierId?: Types.ObjectId;
 
   @Prop({ required: true, trim: true })
   supplierName: string;
@@ -57,6 +69,19 @@ export class Purchase {
 
   @Prop({ required: true, min: 0 })
   totalAmount: number;
+
+  // What has actually been handed over, and what is still owed. paymentStatus
+  // alone could say "partially_paid" without saying how much, so a business
+  // could see that it owed a supplier something but never how much.
+  //
+  // Both default to a settled purchase so rows written before these existed
+  // (paymentStatus 'paid') do not suddenly read as fully outstanding; create()
+  // and recordPayment() set them explicitly from then on.
+  @Prop({ required: true, min: 0, default: 0 })
+  amountPaid: number;
+
+  @Prop({ required: true, min: 0, default: 0 })
+  balanceDue: number;
 
   @Prop({ trim: true })
   notes?: string;

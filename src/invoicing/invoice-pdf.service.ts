@@ -23,6 +23,8 @@ import {
   buildTaxRows,
   formatDate,
   taxTypeName,
+  applyPaymentVisibility,
+  toRenderItems,
 } from '../common/pdf/document-render';
 import { renderDocument } from '../common/pdf/render-document';
 import { PAYMENT_METHOD_LABELS } from '../common/constants/invoice-options';
@@ -34,6 +36,21 @@ import { PAYMENT_METHOD_LABELS } from '../common/constants/invoice-options';
 //
 // Every figure comes straight off the stored invoice. Templates never
 // recompute a subtotal, tax, discount or balance — they only present them.
+
+// RenderBusiness deliberately knows nothing about per-document-type
+// settings, so the fields this service reads are declared here instead of
+// widening the shared render type with every document type's field names.
+// All optional: the preview path passes sample data with none of them, and
+// undefined means "show", so output is unchanged for a business that has
+// never touched the settings screen.
+type InvoiceRenderBusiness = RenderBusiness & {
+  invoiceShowDiscount?: boolean;
+  invoiceShowTax?: boolean;
+  invoiceShowBankInfo?: boolean;
+  invoiceShowUpiInfo?: boolean;
+  invoiceBottomMessage?: string;
+  invoiceShowHsn?: boolean;
+};
 
 const STATUS_LABELS: Record<string, RenderStatus> = {
   draft: { label: 'DRAFT', tone: 'neutral' },
@@ -160,7 +177,7 @@ export class InvoicePdfService {
   // Split out from generate() so preview rendering (fixed sample data, no
   // customer lookup) can share the same drawing code.
   render(
-    business: RenderBusiness,
+    business: InvoiceRenderBusiness,
     customer: RenderCustomer,
     invoice: Invoice,
     templateId?: DocumentTemplateId,
@@ -190,11 +207,18 @@ export class InvoicePdfService {
       { label: 'Due Date', value: formatDate(invoice.dueDate, country) },
     ];
 
+    // Per-document-type display settings. Undefined means on, so a business
+    // that has never opened the settings screen keeps the previous output.
+    const showDiscount = business.invoiceShowDiscount !== false;
+    const showTax = business.invoiceShowTax !== false;
+
     const totals: RenderTotalRow[] = [{ label: 'Subtotal', value: invoice.subtotal }];
-    if (invoice.discount > 0) {
+    if (showDiscount && invoice.discount > 0) {
       totals.push({ label: 'Discount', value: invoice.discount, negative: true });
     }
-    totals.push(...buildTaxRows(taxType, invoice.taxTotal, invoice.items));
+    if (showTax) {
+      totals.push(...buildTaxRows(taxType, invoice.taxTotal, invoice.items));
+    }
     totals.push({
       label: 'Total',
       value: invoice.total,
@@ -228,7 +252,7 @@ export class InvoicePdfService {
       recipientLabel: 'BILL TO',
       status: STATUS_LABELS[invoice.status] ?? STATUS_LABELS.draft,
       metaRows,
-      items: invoice.items,
+      items: toRenderItems(invoice.items),
       totals,
       grandTotal: invoice.total,
       notes: invoice.notes,
@@ -237,15 +261,23 @@ export class InvoicePdfService {
       currency,
       taxType,
       country,
-      footerNote: `Thank you for your business — ${business.name}`,
+      // The business's own sign-off when it has set one.
+      footerNote:
+        business.invoiceBottomMessage?.trim() ||
+        `Thank you for your business — ${business.name}`,
       serviceContext: extras.serviceContext,
       payment: extras.payment ? { ...extras.payment, paidLabel } : paidLabel ? { paidLabel } : undefined,
-      hasTax: taxType !== 'none' && invoice.items.some((item) => item.taxRate > 0),
+      hasTax:
+        showTax && taxType !== 'none' && invoice.items.some((item) => item.taxRate > 0),
       taxLabel: taxTypeName(taxType),
+      show: { hsn: business.invoiceShowHsn === true },
     };
 
     return renderDocument(
-      business,
+      applyPaymentVisibility(business, {
+        bank: business.invoiceShowBankInfo !== false,
+        upi: business.invoiceShowUpiInfo !== false,
+      }),
       customer,
       spec,
       theme,

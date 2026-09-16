@@ -3,7 +3,9 @@ import {
   IsArray,
   IsDateString,
   IsEnum,
+  IsMongoId,
   IsNumber,
+  MaxLength,
   IsOptional,
   IsString,
   Min,
@@ -18,6 +20,13 @@ export class PurchaseItemDto {
   @IsString()
   name: string;
 
+  // Copied from the inventory item, same as the sales documents — the PO PDF
+  // prints it when purchaseShowHsn is on.
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  hsnCode?: string;
+
   @IsNumber()
   @Min(1)
   quantity: number;
@@ -30,6 +39,17 @@ export class PurchaseItemDto {
 export class CreatePurchaseDto {
   @IsString()
   supplierName: string;
+
+  @IsOptional()
+  @IsMongoId()
+  supplierId?: string;
+
+  // Optional: omit it and the amount is inferred from paymentStatus (paid in
+  // full, or nothing). Supply it for a part payment at the counter.
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  amountPaid?: number;
 
   @IsOptional()
   @IsString()

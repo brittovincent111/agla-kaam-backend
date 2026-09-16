@@ -9,6 +9,8 @@ import { ServicesService } from '../services/services.service';
 import { CustomersService } from '../customers/customers.service';
 import { BusinessesService } from '../businesses/businesses.service';
 import { ServicePresetsService } from '../service-presets/service-presets.service';
+import { InvoicingService } from '../invoicing/invoicing.service';
+import { formatCurrency } from '../common/pdf/document-render';
 
 function formatDateEnIN(date: Date): string {
   return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -23,6 +25,7 @@ export class RemindersController {
     private readonly customersService: CustomersService,
     private readonly businessesService: BusinessesService,
     private readonly servicePresetsService: ServicePresetsService,
+    private readonly invoicingService: InvoicingService,
   ) {}
 
   // One request for the whole dashboard: the four reminder feeds, each capped
@@ -97,6 +100,110 @@ export class RemindersController {
       },
       preset?.messageTemplate,
     );
+    return {
+      url: this.remindersService.buildWhatsAppLink(customer.phone, message),
+      message,
+    };
+  }
+
+  // Chasing an unpaid invoice. The app could show that money was outstanding
+  // but had no way to ask for it — every other reminder here is about work
+  // due, not money owed.
+  @Get('payment-link/:invoiceId')
+  async paymentLink(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('invoiceId') invoiceId: string,
+  ) {
+    const invoice = await this.invoicingService.findOne(
+      business.businessId,
+      invoiceId,
+    );
+    const customer = await this.customersService.findOne(
+      business.businessId,
+      invoice.customerId.toString(),
+    );
+    const businessDoc = await this.businessesService.findById(
+      business.businessId,
+    );
+
+    const message = this.remindersService.buildPaymentReminderMessage(
+      {
+        customerName: customer.name,
+        businessName: businessDoc.name,
+        invoiceNumber: invoice.invoiceNumber,
+        // The amount still owed, not the invoice total — chasing the full
+        // amount on a part-paid invoice is how you annoy a customer who has
+        // already paid half.
+        balanceDue: formatCurrency(
+          invoice.balanceDue,
+          invoice.currency || businessDoc.currency || 'INR',
+        ),
+        dueDate: formatDateEnIN(invoice.dueDate),
+      },
+      businessDoc.paymentReminderTemplate,
+    );
+
+    return {
+      url: this.remindersService.buildWhatsAppLink(customer.phone, message),
+      message,
+      balanceDue: invoice.balanceDue,
+    };
+  }
+
+  // The service-card share. Separate from whatsapp-link above because the two
+  // messages say different things — this one is the record of the work done,
+  // that one is a nudge about work that is due — but both are now rendered
+  // here rather than one here and one on the device.
+  @Get('service-card-link/:serviceId')
+  async serviceCardLink(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('serviceId') serviceId: string,
+  ) {
+    const service = await this.servicesService.findOne(
+      business.businessId,
+      serviceId,
+      business,
+    );
+    const customer = await this.customersService.findOne(
+      business.businessId,
+      service.customerId.toString(),
+    );
+    const businessDoc = await this.businessesService.findById(
+      business.businessId,
+    );
+
+    const status =
+      service.status === 'cancelled'
+        ? 'Cancelled'
+        : service.status === 'completed'
+          ? 'Completed'
+          : 'Pending';
+
+    const message = this.remindersService.buildServiceCardMessage(
+      {
+        customerName: customer.name,
+        businessName: businessDoc.name,
+        serviceType: service.serviceType,
+        status,
+        serviceDate: formatDateEnIN(service.serviceDate),
+        // Carries its own newline so the line vanishes on a pending job.
+        completedLine: service.completedAt
+          ? `Completed Date: ${formatDateEnIN(service.completedAt)}\n`
+          : '',
+        warranty: service.warrantyExpiry
+          ? `Warranty until ${formatDateEnIN(service.warrantyExpiry)}`
+          : 'No warranty',
+        nextServiceDate:
+          service.nextServiceInterval === 'none'
+            ? 'None'
+            : formatDateEnIN(service.nextServiceDate),
+        businessContact: businessDoc.phone
+          ? `${businessDoc.name} — ${businessDoc.phone}`
+          : businessDoc.name,
+      },
+      businessDoc.serviceCardTemplate,
+    );
+
     return {
       url: this.remindersService.buildWhatsAppLink(customer.phone, message),
       message,

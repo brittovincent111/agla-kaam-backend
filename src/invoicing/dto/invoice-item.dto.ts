@@ -24,6 +24,14 @@ export class InvoiceItemDto {
   @MaxLength(300)
   description?: string;
 
+  // HSN/SAC code, carried on the line rather than looked up at render time:
+  // the inventory item can be renamed or deleted later, and a document must
+  // keep printing the code it was issued with.
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  hsnCode?: string;
+
   @IsNumber()
   @Min(0.01)
   quantity: number;

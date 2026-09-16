@@ -15,6 +15,8 @@ import {
   RenderStatus,
   RenderTotalRow,
   buildTaxRows,
+  applyPaymentVisibility,
+  toRenderItems,
   formatDate,
   taxTypeName,
 } from '../common/pdf/document-render';
@@ -25,6 +27,18 @@ const STATUS_LABELS: Record<string, RenderStatus> = {
   sent: { label: 'SENT', tone: 'urgent' },
   converted: { label: 'CONVERTED', tone: 'positive' },
   cancelled: { label: 'CANCELLED', tone: 'neutral' },
+};
+
+// Declared locally for the same reason as InvoiceRenderBusiness: the shared
+// RenderBusiness stays free of per-document-type setting names. All optional,
+// and undefined means "show".
+type ProformaRenderBusiness = RenderBusiness & {
+  proformaShowDiscount?: boolean;
+  proformaShowTax?: boolean;
+  proformaShowBankInfo?: boolean;
+  proformaShowUpiInfo?: boolean;
+  proformaBottomMessage?: string;
+  proformaShowHsn?: boolean;
 };
 
 @Injectable()
@@ -56,7 +70,7 @@ export class ProformaPdfService {
   }
 
   render(
-    business: RenderBusiness,
+    business: ProformaRenderBusiness,
     customer: RenderCustomer,
     proforma: ProformaInvoice,
     templateId?: DocumentTemplateId,
@@ -75,10 +89,14 @@ export class ProformaPdfService {
     ];
 
     const totals: RenderTotalRow[] = [{ label: 'Subtotal', value: proforma.subtotal }];
-    if (proforma.discount > 0) {
+    const showDiscount = business.proformaShowDiscount !== false;
+    const showTax = business.proformaShowTax !== false;
+    if (showDiscount && proforma.discount > 0) {
       totals.push({ label: 'Discount', value: proforma.discount, negative: true });
     }
-    totals.push(...buildTaxRows(taxType, proforma.taxTotal, proforma.items));
+    if (showTax) {
+      totals.push(...buildTaxRows(taxType, proforma.taxTotal, proforma.items));
+    }
     totals.push({
       label: 'Total',
       value: proforma.total,
@@ -94,7 +112,7 @@ export class ProformaPdfService {
       recipientLabel: 'PROFORMA TO',
       status: STATUS_LABELS[proforma.status] ?? STATUS_LABELS.draft,
       metaRows,
-      items: proforma.items,
+      items: toRenderItems(proforma.items),
       totals,
       grandTotal: proforma.total,
       notes: proforma.notes,
@@ -103,11 +121,24 @@ export class ProformaPdfService {
       currency,
       taxType,
       country,
-      footerNote: `Thank you for your business — ${business.name}`,
-      hasTax: taxType !== 'none' && proforma.items.some((item) => item.taxRate > 0),
+      footerNote:
+        business.proformaBottomMessage?.trim() ||
+        `Thank you for your business — ${business.name}`,
+      hasTax:
+        showTax && taxType !== 'none' && proforma.items.some((item) => item.taxRate > 0),
       taxLabel: taxTypeName(taxType),
+      show: { hsn: business.proformaShowHsn === true },
     };
 
-    return renderDocument(business, customer, spec, theme, geometry);
+    return renderDocument(
+      applyPaymentVisibility(business, {
+        bank: business.proformaShowBankInfo !== false,
+        upi: business.proformaShowUpiInfo !== false,
+      }),
+      customer,
+      spec,
+      theme,
+      geometry,
+    );
   }
 }

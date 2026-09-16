@@ -14,6 +14,12 @@ export class InvoiceItem {
   @Prop({ trim: true, maxlength: 300 })
   description?: string;
 
+  // Copied from the inventory item at add time. A document is a historical
+  // record — re-reading the code from inventory later would silently rewrite
+  // an invoice that has already been sent.
+  @Prop({ trim: true, uppercase: true, maxlength: 20 })
+  hsnCode?: string;
+
   @Prop({ required: true, min: 0.01 })
   quantity: number;
 

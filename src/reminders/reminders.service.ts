@@ -8,7 +8,12 @@ import {
   Business,
   BusinessDocument,
 } from '../businesses/schemas/business.schema';
-import { DEFAULT_REMINDER_TEMPLATE, renderMessageTemplate } from '../common/utils/message-template';
+import {
+  DEFAULT_CARD_TEMPLATE,
+  DEFAULT_PAYMENT_REMINDER_TEMPLATE,
+  DEFAULT_REMINDER_TEMPLATE,
+  renderMessageTemplate,
+} from '../common/utils/message-template';
 import { toWhatsAppNumber } from '../common/utils/phone';
 import { BusinessesService } from '../businesses/businesses.service';
 import { TeamMembersService } from '../team-members/team-members.service';
@@ -83,10 +88,14 @@ export class RemindersService {
     const soonEnd = addDays(startOfToday, days + 1);
     const warrantyBefore = addDays(startOfToday, 14);
 
+    // serviceDate, matching the row queries below and the Services list.
+    // These counts read nextServiceDate while the rows they label were
+    // selected on serviceDate, so a section could say "3 overdue" above a
+    // different number of cards.
     const windows = {
-      overdue: { nextServiceDate: { $lt: startOfToday } },
-      dueToday: { nextServiceDate: { $gte: startOfToday, $lt: tomorrow } },
-      dueSoon: { nextServiceDate: { $gte: tomorrow, $lt: soonEnd } },
+      overdue: { serviceDate: { $lt: startOfToday } },
+      dueToday: { serviceDate: { $gte: startOfToday, $lt: tomorrow } },
+      dueSoon: { serviceDate: { $gte: tomorrow, $lt: soonEnd } },
       warrantyAlerts: { warrantyExpiry: { $ne: null, $lt: warrantyBefore } },
     };
 
@@ -104,9 +113,27 @@ export class RemindersService {
       this.servicesService.findDueBetween(businessId, startOfToday, tomorrow, viewer, limit),
       this.servicesService.findDueBetween(businessId, tomorrow, soonEnd, viewer, limit),
       this.servicesService.findWarrantyAlerts(businessId, warrantyBefore, viewer, limit),
-      this.servicesService.countReminders(businessId, windows.overdue, viewer),
-      this.servicesService.countReminders(businessId, windows.dueToday, viewer),
-      this.servicesService.countReminders(businessId, windows.dueSoon, viewer),
+      // Pending-only for the three due feeds, so the counts match the rows.
+      // Warranty alerts stay on the default (not-cancelled): a warranty
+      // exists only on work already carried out.
+      this.servicesService.countReminders(
+        businessId,
+        windows.overdue,
+        viewer,
+        ServicesService.PENDING_ONLY,
+      ),
+      this.servicesService.countReminders(
+        businessId,
+        windows.dueToday,
+        viewer,
+        ServicesService.PENDING_ONLY,
+      ),
+      this.servicesService.countReminders(
+        businessId,
+        windows.dueSoon,
+        viewer,
+        ServicesService.PENDING_ONLY,
+      ),
       this.servicesService.countReminders(businessId, windows.warrantyAlerts, viewer),
     ]);
 
@@ -125,6 +152,43 @@ export class RemindersService {
     template?: string,
   ): string {
     return renderMessageTemplate(template?.trim() || DEFAULT_REMINDER_TEMPLATE, vars);
+  }
+
+  // The service-card share. Same renderer and the same override mechanism as
+  // the reminder above, so the two can no longer drift.
+  buildServiceCardMessage(
+    vars: {
+      customerName: string;
+      businessName: string;
+      serviceType: string;
+      status: string;
+      serviceDate: string;
+      completedLine: string;
+      warranty: string;
+      nextServiceDate: string;
+      businessContact: string;
+    },
+    template?: string,
+  ): string {
+    return renderMessageTemplate(template?.trim() || DEFAULT_CARD_TEMPLATE, vars);
+  }
+
+  // The invoice chase. Same renderer and override mechanism as the two
+  // service messages, so all three stay consistent.
+  buildPaymentReminderMessage(
+    vars: {
+      customerName: string;
+      businessName: string;
+      invoiceNumber: string;
+      balanceDue: string;
+      dueDate: string;
+    },
+    template?: string,
+  ): string {
+    return renderMessageTemplate(
+      template?.trim() || DEFAULT_PAYMENT_REMINDER_TEMPLATE,
+      vars,
+    );
   }
 
   buildWhatsAppLink(phone: string, message: string): string {

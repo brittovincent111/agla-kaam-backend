@@ -5,6 +5,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  MaxLength,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -20,6 +21,14 @@ export class ProformaItemDto {
   @IsOptional()
   @IsString()
   description?: string;
+
+  // HSN/SAC, carried on the line rather than looked up at render time: the
+  // inventory item can be renamed or deleted later, and an issued document
+  // must keep printing the code it went out with.
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  hsnCode?: string;
 
   @IsNumber()
   @Min(0.001)

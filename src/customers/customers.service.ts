@@ -307,6 +307,20 @@ export class CustomersService {
     dto: UpdateCustomerDto,
   ): Promise<CustomerDocument> {
     const customer = await this.findOne(businessId, customerId);
+
+    if (dto.phone && dto.phone !== customer.phone) {
+      const existing = await this.customerModel
+        .findOne({ businessId, phone: dto.phone, _id: { $ne: customerId } })
+        .exec();
+      if (existing) {
+        throw new ConflictException({
+          message: 'A customer with this phone number already exists.',
+          existingCustomerId: existing.id,
+          existingCustomerName: existing.name,
+        });
+      }
+    }
+
     // dto.assignedTechnicianId is `null` when the owner is unassigning —
     // only a real id needs to be checked against the roster. This was
     // previously accepted with no check that the id belongs to this

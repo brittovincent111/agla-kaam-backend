@@ -87,7 +87,7 @@ export class ServicesController {
     return this.servicesService.reschedule(
       business.businessId,
       id,
-      dto.nextServiceDate,
+      { serviceDate: dto.serviceDate, nextServiceDate: dto.nextServiceDate },
       business,
       dto.assignedTechnicianId,
     );

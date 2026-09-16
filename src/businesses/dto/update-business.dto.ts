@@ -87,6 +87,16 @@ export class UpdateBusinessDto {
   @IsOptional()
   @IsString()
   @MaxLength(2000)
+  serviceCardTemplate?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  paymentReminderTemplate?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
   defaultQuotationTerms?: string;
 
   // Payment instructions printed on invoices — see Business schema.

@@ -70,6 +70,10 @@ export interface RenderCustomer {
 export interface RenderItem {
   name: string;
   description?: string;
+  // HSN/SAC — the GST classification code, copied onto the line from the
+  // inventory item it was added from. Not the SKU: an SKU is the business's
+  // own stock code and means nothing to a customer or a tax officer.
+  hsn?: string;
   quantity: number;
   rate: number;
   taxRate: number;
@@ -143,6 +147,13 @@ export interface DocumentSpec {
   // tax column on a zero-tax invoice instead of printing a column of "0%".
   hasTax: boolean;
   taxLabel: string;
+  // Optional blocks the business has switched off for THIS document type
+  // (quotationShowSignature and friends). Omitted means show everything, so
+  // every existing caller keeps its current output.
+  show?: { signature?: boolean; hsn?: boolean; serviceAddress?: boolean };
+  // Overrides the items column header. A purchase order is not a service
+  // call, so "SERVICE / ITEM" is wrong on one.
+  itemLabel?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -278,6 +289,46 @@ export interface PaymentLine {
 // It deliberately does NOT gate the record of how an invoice *was* paid
 // (Compact's payment method and status) — that is a fact about the invoice,
 // not standing instructions the business chooses to publish.
+/**
+ * The business as THIS document type should show it: whatever its
+ * *ShowBankInfo / *ShowUpiInfo settings have switched off is stripped, so
+ * paymentLines() and the QR block simply find nothing to draw.
+ *
+ * Done by narrowing the business rather than threading flags through the
+ * five layouts, each of which calls paymentLines() itself and would
+ * otherwise have to remember to check.
+ */
+/**
+ * Document line items as the renderer wants them. The only translation is
+ * the HSN field name: every document schema stores it as `hsnCode`, while
+ * RenderItem calls it `hsn` alongside the other presentation fields.
+ */
+export function toRenderItems(
+  items: (Omit<RenderItem, "hsn"> & { hsnCode?: string })[],
+): RenderItem[] {
+  return items.map((item) => ({ ...item, hsn: item.hsnCode }));
+}
+
+export function applyPaymentVisibility(
+  business: RenderBusiness,
+  show: { bank?: boolean; upi?: boolean },
+): RenderBusiness {
+  if (show.bank !== false && show.upi !== false) return business;
+  const next: RenderBusiness = { ...business };
+  if (show.upi === false) {
+    next.paymentUpiId = undefined;
+    next.paymentQrContent = undefined;
+    next.paymentQrBuffer = undefined;
+  }
+  if (show.bank === false) {
+    next.bankDetails = undefined;
+    next.paymentBankName = undefined;
+    next.paymentAccountNumber = undefined;
+    next.paymentAccountCode = undefined;
+  }
+  return next;
+}
+
 export function paymentLines(business: RenderBusiness): PaymentLine[] {
   if (business.showPaymentDetailsOnInvoice === false) return [];
   const lines: PaymentLine[] = [];
@@ -988,6 +1039,7 @@ export function drawPaymentBlock(
 // slot regardless wasted 40pt at the foot of every document, which was
 // enough on its own to push a short invoice onto a second page.
 export function measureSignature(ctx: Ctx): number {
+  if (ctx.spec.show?.signature === false) return 0;
   return ctx.business.signature ? 74 : 34;
 }
 
@@ -997,6 +1049,9 @@ export function drawSignatureBlock(
   rightEdge: number,
   boxWidth = 150,
 ): number {
+  // Gated here rather than at the five layout call sites, so every layout
+  // honours the setting without each having to remember to check it.
+  if (ctx.spec.show?.signature === false) return top;
   const { doc, colors, business } = ctx;
   const boxX = rightEdge - boxWidth;
   const imageHeight = business.signature ? 40 : 0;

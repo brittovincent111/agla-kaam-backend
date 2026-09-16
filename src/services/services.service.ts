@@ -206,7 +206,7 @@ export class ServicesService {
   async reschedule(
     businessId: string,
     serviceId: string,
-    nextServiceDate: string,
+    dates: { serviceDate?: string; nextServiceDate?: string },
     viewer: AuthenticatedBusiness,
     assignedTechnicianId?: string | null,
   ): Promise<ServiceDocument> {
@@ -227,8 +227,17 @@ export class ServicesService {
       }
     }
 
-    service.nextServiceDate = new Date(nextServiceDate);
-    service.nextServiceInterval = 'custom';
+    // Each date moves on its own. A reassign passes neither and must leave
+    // both alone; an older client passes only nextServiceDate.
+    if (dates.serviceDate !== undefined) {
+      service.serviceDate = new Date(dates.serviceDate);
+    }
+    if (dates.nextServiceDate !== undefined) {
+      service.nextServiceDate = new Date(dates.nextServiceDate);
+      // Only the next-visit date invalidates the interval it was derived
+      // from. Moving serviceDate leaves nextServiceDate where it was.
+      service.nextServiceInterval = 'custom';
+    }
     return service.save();
   }
 
@@ -507,6 +516,15 @@ export class ServicesService {
   // in the WhatsApp reminder run.
   private static readonly NOT_CANCELLED = { status: { $ne: 'cancelled' } };
 
+  // A due feed is work still to be done. A completed job is not that, and
+  // the Services list has always asked the server for status: 'pending' —
+  // Home kept showing a job under "Overdue" after it had been completed.
+  //
+  // Warranty alerts deliberately keep NOT_CANCELLED instead: a warranty only
+  // exists on work that has been carried out, so pending-only would empty
+  // that feed.
+  static readonly PENDING_ONLY = { status: 'pending' };
+
   async findDueBetween(
     businessId: string,
     from: Date,
@@ -521,6 +539,7 @@ export class ServicesService {
       'serviceDate',
       viewer,
       limit,
+      ServicesService.PENDING_ONLY,
     );
   }
 
@@ -537,6 +556,7 @@ export class ServicesService {
       'serviceDate',
       viewer,
       limit,
+      ServicesService.PENDING_ONLY,
     );
   }
 
@@ -563,12 +583,13 @@ export class ServicesService {
     businessId: string,
     window: Record<string, unknown>,
     viewer?: AuthenticatedBusiness,
+    statusFilter: Record<string, unknown> = ServicesService.NOT_CANCELLED,
   ): Promise<number> {
     return this.serviceModel
       .countDocuments(
         andFilters(
           { businessId },
-          ServicesService.NOT_CANCELLED,
+          statusFilter,
           window,
           await this.technicianServiceFilter(businessId, viewer),
         ),
@@ -582,12 +603,13 @@ export class ServicesService {
     sortField: string,
     viewer: AuthenticatedBusiness | undefined,
     limit?: number,
+    statusFilter: Record<string, unknown> = ServicesService.NOT_CANCELLED,
   ): Promise<ServiceDocument[]> {
     const query = this.serviceModel
       .find(
         andFilters(
           { businessId },
-          ServicesService.NOT_CANCELLED,
+          statusFilter,
           window,
           await this.technicianServiceFilter(businessId, viewer),
         ),

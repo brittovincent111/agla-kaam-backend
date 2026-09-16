@@ -3,6 +3,8 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { Purchase, PurchaseSchema } from './schemas/purchase.schema';
 import { PurchasesService } from './purchases.service';
 import { PurchasesController } from './purchases.controller';
+import { PurchasePdfService } from './purchase-pdf.service';
+import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
 import { InventoryModule } from '../inventory/inventory.module';
 import { BusinessesModule } from '../businesses/businesses.module';
 
@@ -13,9 +15,10 @@ import { BusinessesModule } from '../businesses/businesses.module';
     ]),
     InventoryModule,
     BusinessesModule,
+    SubscriptionsModule,
   ],
   controllers: [PurchasesController],
-  providers: [PurchasesService],
+  providers: [PurchasesService, PurchasePdfService],
   exports: [PurchasesService],
 })
 export class PurchasesModule {}

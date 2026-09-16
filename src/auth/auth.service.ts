@@ -216,12 +216,20 @@ export class AuthService {
     const ticket = await this.getGoogleClient(webClientId)
       .verifyIdToken({ idToken, audience: webClientId })
       .catch((err) => {
-        console.error('[loginWithGoogle] verifyIdToken failed:', err);
+        console.error(
+          `[loginWithGoogle] verifyIdToken failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
         return null;
       });
     const payload = ticket?.getPayload();
     if (!payload?.sub || !payload.email) {
-      console.error('[loginWithGoogle] missing sub/email in payload:', payload);
+      // Logged as a string, not the raw value: when verification fails the
+      // payload is undefined, and anything that inspects console arguments
+      // (a log shipper, an editor's console hook) can throw on it — which
+      // masked this 401 as a 500 and hid the real cause underneath.
+      console.error(
+        `[loginWithGoogle] missing sub/email in payload: ${JSON.stringify(payload ?? null)}`,
+      );
       throw new UnauthorizedException('Invalid Google sign-in');
     }
 
