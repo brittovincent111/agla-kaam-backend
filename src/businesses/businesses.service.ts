@@ -44,7 +44,10 @@ import { ServicePresetsService } from '../service-presets/service-presets.servic
 import { UpdateBusinessDto } from './dto/update-business.dto';
 import { DocumentTemplateId } from '../common/pdf/document-templates';
 import { S3Service } from '../common/s3/s3.service';
-import { inferBusinessGeoDefaults } from '../common/utils/geo-defaults';
+import {
+  inferBusinessGeoDefaults,
+  geoDefaultsForCountry,
+} from '../common/utils/geo-defaults';
 import { splitClearableUpdate } from '../common/utils/clearable-update';
 
 export interface BusinessWithBranding {
@@ -380,12 +383,27 @@ export class BusinessesService implements OnModuleInit {
     const freeTierLimit = Number(
       this.configService.get('FREE_TIER_CUSTOMER_LIMIT') ?? 25,
     );
-    return { ...business.toObject(), customerCount, freeTierLimit };
+    // Resolved server-side so the app never keeps its own copy of what a
+    // country implies — dial code, tax name, statutory rates.
+    return {
+      ...business.toObject(),
+      customerCount,
+      freeTierLimit,
+      geo: geoDefaultsForCountry(business.country),
+    };
   }
 
   async update(id: string, dto: UpdateBusinessDto): Promise<BusinessDocument> {
     const before = await this.findById(id);
     const isFirstTradeSelection = !before.tradeType && !!dto.tradeType;
+
+    // A Google/Apple sign-up arrives with no phone, so registration had
+    // nothing to infer from and fell back to India. Onboarding asks for the
+    // phone straight afterwards — that is the first real signal of where this
+    // business is, so apply it. Only on the FIRST phone, and never over a
+    // value the caller set explicitly in the same request.
+    const geoFromFirstPhone =
+      !before.phone && dto.phone ? inferBusinessGeoDefaults(dto.phone) : null;
 
     // Subscription pricing is derived from `country` (see
     // SubscriptionsService.createOrder), so letting it change freely once a
@@ -414,7 +432,21 @@ export class BusinessesService implements OnModuleInit {
     // number already belongs to another account" — which is also the hint a
     // returning user needs when they've accidentally created a second account.
     const business = await this.businessModel
-      .findByIdAndUpdate(id, splitClearableUpdate({ ...dto }), { new: true })
+      .findByIdAndUpdate(
+        id,
+        splitClearableUpdate({
+          ...(geoFromFirstPhone
+            ? {
+                country: geoFromFirstPhone.country,
+                currency: geoFromFirstPhone.currency,
+                timezone: geoFromFirstPhone.timezone,
+                taxType: geoFromFirstPhone.taxType,
+              }
+            : {}),
+          ...dto,
+        }),
+        { new: true },
+      )
       .exec()
       .catch((err: { code?: number; keyPattern?: Record<string, unknown> }) => {
         if (err?.code === 11000) {

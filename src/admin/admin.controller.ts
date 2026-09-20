@@ -14,10 +14,15 @@ import { Throttle } from '@nestjs/throttler';
 import { AdminService } from './admin.service';
 import { AdminLoginDto } from './dto/admin-login.dto';
 import { AdminAuthGuard } from './admin-auth.guard';
+import { AppVersionService } from '../app-version/app-version.service';
+import { UpdateAppVersionDto } from '../app-version/dto/update-app-version.dto';
 
 @Controller('admin')
 export class AdminController {
-  constructor(private readonly adminService: AdminService) {}
+  constructor(
+    private readonly adminService: AdminService,
+    private readonly appVersion: AppVersionService,
+  ) {}
 
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   @HttpCode(200)
@@ -91,6 +96,21 @@ export class AdminController {
       body.tier,
       body.renewalDate,
     );
+  }
+
+  // Editable at runtime on purpose: the moment you need to force an update is
+  // usually the moment something is broken, which is the worst time to be
+  // waiting on a deploy.
+  @UseGuards(AdminAuthGuard)
+  @Get('app-version')
+  appVersions() {
+    return this.appVersion.all();
+  }
+
+  @UseGuards(AdminAuthGuard)
+  @Patch('app-version')
+  setAppVersion(@Body() dto: UpdateAppVersionDto) {
+    return this.appVersion.upsert(dto);
   }
 
   @UseGuards(AdminAuthGuard)

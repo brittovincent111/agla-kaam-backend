@@ -288,17 +288,70 @@ export class CustomersService {
     return customer;
   }
 
+  /**
+   * `onlyIfMissing` is for captures the user did not ask for — the silent GPS
+   * read taken while completing a job. That read is trustworthy only when the
+   * technician is at the door; an owner closing the same job from the office
+   * would otherwise move this customer's doorstep pin to the office and break
+   * navigation for every future visit. Seeding an empty pin is still worth
+   * it, so those captures fill a gap but never overwrite.
+   *
+   * A deliberate tap on "Pin location" passes nothing and overwrites, which
+   * is the whole point of that button: it is how a wrong pin gets corrected.
+   */
   async setDefaultLocation(
     businessId: string,
     customerId: string,
     location: { latitude: number; longitude: number; capturedAt: Date },
+    onlyIfMissing = false,
   ): Promise<void> {
     await this.customerModel
       .updateOne(
-        { _id: customerId, businessId },
+        {
+          _id: customerId,
+          businessId,
+          ...(onlyIfMissing ? { defaultLocation: { $exists: false } } : {}),
+        },
         { $set: { defaultLocation: location } },
       )
       .exec();
+  }
+
+  /**
+   * The doorstep pin, set deliberately from the customer's own screen.
+   *
+   * Until this existed the pin could only be written as a side effect of
+   * logging or completing a job, so a pin captured from the wrong place — an
+   * office, a previous customer's door — could not be corrected without
+   * driving back and re-pinning from a service card. Overwrites, because
+   * correcting is the only reason to be here.
+   */
+  async setDoorstepPin(
+    businessId: string,
+    customerId: string,
+    viewer: AuthenticatedBusiness,
+    location: { latitude: number; longitude: number },
+  ): Promise<CustomerDocument> {
+    // Enforces the same access rule as viewing: a technician may pin only the
+    // customers they are allowed to see.
+    const customer = await this.findOneForViewer(businessId, customerId, viewer);
+    customer.defaultLocation = {
+      latitude: location.latitude,
+      longitude: location.longitude,
+      capturedAt: new Date(),
+    };
+    return customer.save();
+  }
+
+  /** Drops a pin that is wrong and cannot be re-captured from here. */
+  async clearDoorstepPin(
+    businessId: string,
+    customerId: string,
+    viewer: AuthenticatedBusiness,
+  ): Promise<CustomerDocument> {
+    const customer = await this.findOneForViewer(businessId, customerId, viewer);
+    customer.set('defaultLocation', undefined);
+    return customer.save();
   }
 
   async update(

@@ -149,10 +149,13 @@ export class ServicesService {
       service.location = captured;
       // Cached on the customer too, so every future visit inherits it and
       // "Use saved location from last visit" works — same as the log path.
+      // Seed-only: nobody asked for this read, so it must not move a pin that
+      // was already deliberately set.
       await this.customersService.setDefaultLocation(
         businessId,
         service.customerId.toString(),
         captured,
+        true,
       );
     }
 

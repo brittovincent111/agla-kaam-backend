@@ -55,6 +55,15 @@ export class TeamMember {
   @Prop({ default: true })
   active: boolean;
 
+  @Prop({ trim: true })
+  phone?: string;
+
+  @Prop({ trim: true })
+  specialty?: string;
+
+  @Prop({ trim: true, default: 'technician' })
+  role?: string;
+
   // This technician's own device token. Deliberately NOT stored on the
   // business: a technician authenticates with their owner's businessId, so a
   // single shared field would have each new technician login overwrite the

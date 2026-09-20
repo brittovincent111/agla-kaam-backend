@@ -172,15 +172,31 @@ export class RemindersController {
       business.businessId,
     );
 
-    const status =
-      service.status === 'cancelled'
-        ? 'Cancelled'
-        : service.status === 'completed'
-          ? 'Completed'
-          : 'Pending';
+    // If pending (not completed), return the exact same reminder message as the listing page
+    // (from preset if matching serviceType, or default reminder template).
+    if (service.status !== 'completed') {
+      const preset = await this.servicePresetsService.findByName(
+        business.businessId,
+        service.serviceType,
+      );
+
+      const message = this.remindersService.buildWhatsAppMessage(
+        {
+          customerName: customer.name,
+          businessName: businessDoc.name,
+          serviceType: service.serviceType,
+          nextServiceDate: formatDateEnIN(service.nextServiceDate),
+        },
+        preset?.messageTemplate,
+      );
+      return {
+        url: this.remindersService.buildWhatsAppLink(customer.phone, message),
+        message,
+      };
+    }
 
     const reviewLine =
-      service.status === 'completed' && businessDoc.googleReviewUrl?.trim()
+      businessDoc.googleReviewUrl?.trim()
         ? `\n\n⭐ Enjoyed our service? Please leave us a Google review:\n${businessDoc.googleReviewUrl.trim()}`
         : '';
 
@@ -189,7 +205,7 @@ export class RemindersController {
         customerName: customer.name,
         businessName: businessDoc.name,
         serviceType: service.serviceType,
-        status,
+        status: 'Completed',
         serviceDate: formatDateEnIN(service.serviceDate),
         // Carries its own newline so the line vanishes on a pending job.
         completedLine: service.completedAt

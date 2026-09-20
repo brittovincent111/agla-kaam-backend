@@ -8,7 +8,10 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import * as bcrypt from 'bcrypt';
 import { TeamMember, TeamMemberDocument } from './schemas/team-member.schema';
+import { Service, ServiceDocument } from '../services/schemas/service.schema';
+import { Customer, CustomerDocument } from '../customers/schemas/customer.schema';
 import { CreateTeamMemberDto } from './dto/create-team-member.dto';
+import { UpdateTeamMemberDto } from './dto/update-team-member.dto';
 import { BusinessesService } from '../businesses/businesses.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import {
@@ -16,6 +19,7 @@ import {
   TEAM_SEAT_LIMIT,
   tierAllowsTeam,
 } from '../common/constants/subscription-options';
+import { idFilter, idsFilter } from '../common/utils/id-match';
 
 const PASSWORD_SALT_ROUNDS = 10;
 
@@ -24,6 +28,10 @@ export class TeamMembersService {
   constructor(
     @InjectModel(TeamMember.name)
     private readonly teamMemberModel: Model<TeamMemberDocument>,
+    @InjectModel(Service.name)
+    private readonly serviceModel: Model<ServiceDocument>,
+    @InjectModel(Customer.name)
+    private readonly customerModel: Model<CustomerDocument>,
     private readonly businessesService: BusinessesService,
     private readonly subscriptionsService: SubscriptionsService,
   ) {}
@@ -62,11 +70,107 @@ export class TeamMembersService {
       .exec();
   }
 
-  findAllForBusiness(businessId: string): Promise<TeamMemberDocument[]> {
-    return this.teamMemberModel
-      .find({ businessId })
+  async findAllForBusiness(businessId: string): Promise<any[]> {
+    const members = await this.teamMemberModel
+      .find({ businessId: idFilter(businessId) })
       .sort({ createdAt: 1 })
+      .lean()
       .exec();
+
+    if (!members.length) return [];
+
+    const memberIds = members.map((m) => m._id.toString());
+    const idFilters = memberIds.flatMap((id) =>
+      Types.ObjectId.isValid(id) ? [id, new Types.ObjectId(id)] : [id],
+    );
+    const businessIdFilters = Types.ObjectId.isValid(businessId)
+      ? [businessId, new Types.ObjectId(businessId)]
+      : [businessId];
+    const counts = await this.serviceModel.aggregate([
+      {
+        $match: {
+          businessId: { $in: businessIdFilters },
+          assignedTechnicianId: { $in: idFilters },
+          status: 'completed',
+        },
+      },
+      { $group: { _id: '$assignedTechnicianId', count: { $sum: 1 } } },
+    ]);
+    const countMap = new Map(counts.map((c) => [c._id.toString(), c.count]));
+
+    return members.map((m) => ({
+      ...m,
+      serviceCount: countMap.get(m._id.toString()) || 0,
+    }));
+  }
+
+  async getMemberTasks(businessId: string, teamMemberId: string) {
+    if (!Types.ObjectId.isValid(teamMemberId)) {
+      throw new NotFoundException('Team member not found');
+    }
+    const member = await this.teamMemberModel.findById(teamMemberId).lean().exec();
+    if (!member || member.businessId?.toString() !== businessId.toString()) {
+      throw new NotFoundException('Team member not found');
+    }
+
+    // Customers whose default assigned technician is this member
+    const assignedCustomers = await this.customerModel
+      .find({
+        businessId: idFilter(businessId),
+        assignedTechnicianId: idFilter(teamMemberId),
+      })
+      .sort({ name: 1 })
+      .lean()
+      .exec();
+
+    const assignedCustomerIds = assignedCustomers.map((c) => c._id.toString());
+
+    // Services directly assigned or through default customer assignment
+    const serviceFilter: any = {
+      businessId: idFilter(businessId),
+    };
+
+    if (assignedCustomerIds.length > 0) {
+      serviceFilter.$or = [
+        { assignedTechnicianId: idFilter(teamMemberId) },
+        {
+          assignedTechnicianId: { $exists: false },
+          customerId: idsFilter(assignedCustomerIds),
+        },
+      ];
+    } else {
+      serviceFilter.assignedTechnicianId = idFilter(teamMemberId);
+    }
+
+    const [pendingTasks, completedTasks] = await Promise.all([
+      this.serviceModel
+        .find({ ...serviceFilter, status: 'pending' })
+        .populate('customerId', 'name phone address')
+        .sort({ serviceDate: 1 })
+        .lean()
+        .exec(),
+      this.serviceModel
+        .find({ ...serviceFilter, status: 'completed' })
+        .populate('customerId', 'name phone address')
+        .sort({ completedAt: -1, serviceDate: -1 })
+        .lean()
+        .exec(),
+    ]);
+
+    return {
+      member: {
+        ...member,
+        serviceCount: completedTasks.length,
+      },
+      stats: {
+        completedCount: completedTasks.length,
+        pendingCount: pendingTasks.length,
+        customerCount: assignedCustomers.length,
+      },
+      pendingTasks,
+      completedTasks,
+      assignedCustomers,
+    };
   }
 
   // Shared by create() (a brand-new seat) and setActive() (reactivating one)
@@ -123,9 +227,12 @@ export class TeamMembersService {
     try {
       return await this.teamMemberModel.create({
         businessId,
-        name: dto.name,
+        name: dto.name.trim(),
         email: normalizedEmail,
         passwordHash,
+        phone: dto.phone?.trim(),
+        specialty: dto.specialty?.trim(),
+        role: dto.role || 'technician',
         active: true,
       });
     } catch (err) {
@@ -212,5 +319,47 @@ export class TeamMembersService {
 
     member.passwordHash = await bcrypt.hash(newPassword, PASSWORD_SALT_ROUNDS);
     return member.save();
+  }
+
+  async update(
+    businessId: string,
+    teamMemberId: string,
+    dto: UpdateTeamMemberDto,
+  ): Promise<TeamMemberDocument> {
+    if (!Types.ObjectId.isValid(teamMemberId)) {
+      throw new NotFoundException('Team member not found');
+    }
+    const member = await this.teamMemberModel.findById(teamMemberId).exec();
+    if (!member || member.businessId.toString() !== businessId) {
+      throw new NotFoundException('Team member not found');
+    }
+
+    if (dto.active === true && !member.active) {
+      await this.assertSeatAvailable(businessId);
+    }
+
+    if (dto.name !== undefined) member.name = dto.name.trim();
+    if (dto.phone !== undefined) member.phone = dto.phone.trim();
+    if (dto.specialty !== undefined) member.specialty = dto.specialty.trim();
+    if (dto.role !== undefined) member.role = dto.role;
+    if (dto.active !== undefined) member.active = dto.active;
+
+    return member.save();
+  }
+
+  async remove(
+    businessId: string,
+    teamMemberId: string,
+  ): Promise<{ success: boolean; id: string }> {
+    if (!Types.ObjectId.isValid(teamMemberId)) {
+      throw new NotFoundException('Team member not found');
+    }
+    const member = await this.teamMemberModel.findById(teamMemberId).exec();
+    if (!member || member.businessId.toString() !== businessId) {
+      throw new NotFoundException('Team member not found');
+    }
+
+    await this.teamMemberModel.deleteOne({ _id: teamMemberId, businessId }).exec();
+    return { success: true, id: teamMemberId };
   }
 }

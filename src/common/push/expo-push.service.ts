@@ -4,6 +4,13 @@ import { Injectable, Logger } from '@nestjs/common';
 // sent one HTTP request per business inside a sequential loop, which at any
 // real scale would have taken longer than the hour between runs.
 const EXPO_PUSH_ENDPOINT = 'https://exp.host/--/api/v2/push/send';
+/**
+ * Must match REMINDER_CHANNEL_ID in the app. Android puts a push with no
+ * channelId on the default channel, so the "Service reminders" channel the
+ * app creates — high importance, vibration — was being created and then
+ * ignored for every remote notification. iOS has no channels and ignores it.
+ */
+const ANDROID_CHANNEL_ID = 'reminders';
 const MAX_MESSAGES_PER_REQUEST = 100;
 
 export interface PushMessage {
@@ -86,7 +93,9 @@ export class ExpoPushService {
             'Accept-encoding': 'gzip, deflate',
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify(batch),
+          body: JSON.stringify(
+            batch.map((message) => ({ ...message, channelId: ANDROID_CHANNEL_ID })),
+          ),
         });
 
         if (!response.ok) {

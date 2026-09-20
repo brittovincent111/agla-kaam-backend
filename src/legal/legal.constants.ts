@@ -662,6 +662,63 @@ const DELETE_ACCOUNT_BODY = `
 </footer>
 `;
 
+const SUPPORT_BODY = `
+<div class="hero">
+  <div class="hero-inner">
+    <p class="kicker">Agla Kaam &middot; Help &amp; Support</p>
+    <h1>Customer Support &amp; Help Desk</h1>
+    <p class="summary">Need help with your Agla Kaam account, Apple App Store subscription, WhatsApp reminders, or GST invoices? We are here to help.</p>
+  </div>
+</div>
+
+<div class="container">
+  <main class="content" style="grid-column: 1 / -1; max-width: 820px; margin: 0 auto;">
+    <section id="contact-channels">
+      <h2><span class="num">01</span> Direct Contact Channels</h2>
+      <div class="fact-line"><span class="k">Email Support</span><span class="v"><a href="mailto:admin@velocrew.in">admin@velocrew.in</a> &mdash; Guaranteed reply within 24 hours</span></div>
+      <div class="fact-line"><span class="k">Phone Support</span><span class="v"><a href="tel:+918217226251">+91 82172 26251</a> / <a href="tel:+919562994337">+91 95629 94337</a> &mdash; Mon&ndash;Sat, 9:00 AM&ndash;7:00 PM IST</span></div>
+      <div class="fact-line"><span class="k">WhatsApp Helpdesk</span><span class="v"><a href="https://wa.me/918217226251" target="_blank" rel="noopener">Chat with Support on WhatsApp (+91 82172 26251)</a></span></div>
+      <div class="fact-line"><span class="k">Publisher Entity</span><span class="v">VeloCrew &middot; UDYAM-KL-13-0110771 &middot; Bengaluru &amp; Thrissur, India</span></div>
+    </section>
+
+    <section id="app-store-support">
+      <h2><span class="num">02</span> Apple App Store &amp; In-App Purchases</h2>
+      <p><strong>Restoring Purchases:</strong> If you reinstalled Agla Kaam or switched to a new iPhone, open the app, tap <strong>Drawer &rarr; Settings &rarr; Subscription Plan</strong>, and tap <strong>"Restore Purchases"</strong>. The app will sync your active purchase directly with Apple.</p>
+      <p><strong>Managing Subscriptions:</strong> To upgrade, change tier, or cancel your auto-renewal, open your iPhone's <strong>Settings &rarr; tap your Apple ID &rarr; Subscriptions &rarr; Agla Kaam</strong>.</p>
+      <p><strong>Refunds:</strong> In-app purchase billing on iOS is managed directly by Apple. To request a refund, visit <a href="https://reportaproblem.apple.com" target="_blank" rel="noopener">reportaproblem.apple.com</a>.</p>
+    </section>
+
+    <section id="troubleshooting">
+      <h2><span class="num">03</span> Common Troubleshooting</h2>
+      <p><strong>WhatsApp Reminders:</strong> Agla Kaam generates pre-formatted WhatsApp links that open in your WhatsApp app. No messages are sent automatically or behind your back &mdash; you always preview and send them yourself.</p>
+      <p><strong>Cloud Backup &amp; Data Security:</strong> Your customer books and invoices are automatically saved to our cloud servers. You will never lose data when updating the app or switching devices.</p>
+      <p><strong>Account Deletion:</strong> If you wish to delete your account or any data, you can do so in the app under Settings, or visit our <a href="delete-account">Account Deletion Page</a>.</p>
+    </section>
+  </main>
+</div>
+
+<footer>
+  <div class="footer-inner">
+    <div class="footer-block">
+      <p class="label">Agla Kaam</p>
+      <p>A product of VeloCrew</p>
+      <p>UDYAM-KL-13-0110771</p>
+    </div>
+    <div class="footer-block">
+      <p class="label">Registered office</p>
+      <p>Chittilappilly House, Thrissur</p>
+      <p>Puzhakkal Block Panchayat</p>
+      <p>Thrissur District, Kerala 680552, India</p>
+    </div>
+    <div class="footer-block">
+      <p class="label">Contact</p>
+      <p><a href="mailto:admin@velocrew.in">admin@velocrew.in</a></p>
+      <p><a href="tel:+919562994337">+91 95629 94337</a></p>
+    </div>
+  </div>
+</footer>
+`;
+
 export const PRIVACY_POLICY_HTML = page('Privacy Policy', PRIVACY_POLICY_BODY);
 export const TERMS_OF_SERVICE_HTML = page(
   'Terms of Service',
@@ -671,3 +728,8 @@ export const DELETE_ACCOUNT_HTML = page(
   'Delete Your Account or Data',
   DELETE_ACCOUNT_BODY,
 );
+export const SUPPORT_HTML = page(
+  'Customer Support & Help Desk',
+  SUPPORT_BODY,
+);
+

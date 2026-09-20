@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -21,6 +22,7 @@ import { CustomersService } from './customers.service';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
 import { ListCustomersDto } from './dto/list-customers.dto';
+import { SetCustomerLocationDto } from './dto/set-customer-location.dto';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('customers')
@@ -70,6 +72,26 @@ export class CustomersController {
     @Param('id') id: string,
   ) {
     return this.customersService.findOneForViewer(business.businessId, id, business);
+  }
+
+  // Deliberately not owner-only: the person standing at the customer's door
+  // is the technician, and they are the only one who can pin it correctly.
+  // findOneForViewer still limits them to their own customers.
+  @Put(':id/location')
+  setDoorstepPin(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+    @Body() dto: SetCustomerLocationDto,
+  ) {
+    return this.customersService.setDoorstepPin(business.businessId, id, business, dto);
+  }
+
+  @Delete(':id/location')
+  clearDoorstepPin(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+  ) {
+    return this.customersService.clearDoorstepPin(business.businessId, id, business);
   }
 
   @Roles('owner')

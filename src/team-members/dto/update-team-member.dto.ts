@@ -1,5 +1,5 @@
 import {
-  IsEmail,
+  IsBoolean,
   IsIn,
   IsOptional,
   IsString,
@@ -7,19 +7,12 @@ import {
   MinLength,
 } from 'class-validator';
 
-export class CreateTeamMemberDto {
+export class UpdateTeamMemberDto {
+  @IsOptional()
   @IsString()
   @MinLength(1)
   @MaxLength(100)
-  name: string;
-
-  @IsEmail()
-  email: string;
-
-  @IsString()
-  @MinLength(8)
-  @MaxLength(72)
-  password: string;
+  name?: string;
 
   @IsOptional()
   @IsString()
@@ -34,4 +27,8 @@ export class CreateTeamMemberDto {
   @IsOptional()
   @IsIn(['technician', 'manager'])
   role?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  active?: boolean;
 }

@@ -8,6 +8,9 @@ import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { HealthController } from './health.controller';
 import { AuthModule } from './auth/auth.module';
 import { BusinessesModule } from './businesses/businesses.module';
+import { GeoModule } from './geo/geo.module';
+import { AppVersionModule } from './app-version/app-version.module';
+import { MinVersionGuard } from './common/guards/min-version.guard';
 import { CustomersModule } from './customers/customers.module';
 import { ServicePresetsModule } from './service-presets/service-presets.module';
 import { ServicesModule } from './services/services.module';
@@ -58,6 +61,8 @@ import { validate } from './env.validation';
     ScheduleModule.forRoot(),
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 60 }]),
     AuthModule,
+    GeoModule,
+    AppVersionModule,
     BusinessesModule,
     CustomersModule,
     ServicePresetsModule,
@@ -79,6 +84,10 @@ import { validate } from './env.validation';
     ProformaInvoicesModule,
   ],
   controllers: [HealthController],
-  providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
+  providers: [
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // After the throttler: a blocked build should still be rate limited.
+    { provide: APP_GUARD, useClass: MinVersionGuard },
+  ],
 })
 export class AppModule {}

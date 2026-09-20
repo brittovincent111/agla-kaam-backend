@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -16,6 +17,7 @@ import {
 } from '../common/decorators/current-business.decorator';
 import { TeamMembersService } from './team-members.service';
 import { CreateTeamMemberDto } from './dto/create-team-member.dto';
+import { UpdateTeamMemberDto } from './dto/update-team-member.dto';
 import { ResetTeamMemberPasswordDto } from './dto/reset-team-member-password.dto';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -35,6 +37,23 @@ export class TeamMembersController {
   @Get()
   findAll(@CurrentBusiness() business: AuthenticatedBusiness) {
     return this.teamMembersService.findAllForBusiness(business.businessId);
+  }
+
+  @Get(':id/tasks')
+  getMemberTasks(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+  ) {
+    return this.teamMembersService.getMemberTasks(business.businessId, id);
+  }
+
+  @Patch(':id')
+  update(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+    @Body() dto: UpdateTeamMemberDto,
+  ) {
+    return this.teamMembersService.update(business.businessId, id, dto);
   }
 
   @Patch(':id/activate')
@@ -64,5 +83,13 @@ export class TeamMembersController {
       id,
       dto.password,
     );
+  }
+
+  @Delete(':id')
+  remove(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+  ) {
+    return this.teamMembersService.remove(business.businessId, id);
   }
 }

@@ -3,6 +3,7 @@ import {
   DELETE_ACCOUNT_HTML,
   PRIVACY_POLICY_HTML,
   TERMS_OF_SERVICE_HTML,
+  SUPPORT_HTML,
 } from './legal.constants';
 
 @Controller('legal')
@@ -17,6 +18,19 @@ export class LegalController {
   @Header('Content-Type', 'text/html; charset=utf-8')
   termsOfService(): string {
     return TERMS_OF_SERVICE_HTML;
+  }
+
+  // Support & Help Desk page required by Apple App Store and Google Play
+  @Get('support')
+  @Header('Content-Type', 'text/html; charset=utf-8')
+  support(): string {
+    return SUPPORT_HTML;
+  }
+
+  @Get('contact')
+  @Header('Content-Type', 'text/html; charset=utf-8')
+  contact(): string {
+    return SUPPORT_HTML;
   }
 
   // Public page linked from the Google Play "Delete account URL" / "Delete
