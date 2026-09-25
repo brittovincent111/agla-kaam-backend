@@ -139,6 +139,18 @@ class EnvironmentVariables {
   @IsOptional()
   @IsIn(['production', 'sandbox'])
   APPLE_IAP_ENVIRONMENT?: string;
+
+  @IsOptional()
+  @IsString()
+  GOOGLE_PLACES_API_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  LEAD_FINDER_DAILY_LIMIT?: string;
+
+  @IsOptional()
+  @IsString()
+  LEAD_FINDER_MONTHLY_LIMIT?: string;
 }
 
 // Wired into ConfigModule.forRoot({ validate }) — throwing here aborts

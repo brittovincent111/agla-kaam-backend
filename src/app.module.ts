@@ -29,6 +29,7 @@ import { InventoryModule } from './inventory/inventory.module';
 import { PurchasesModule } from './purchases/purchases.module';
 import { SuppliersModule } from './suppliers/suppliers.module';
 import { ProformaInvoicesModule } from './proforma-invoices/proforma-invoices.module';
+import { LeadFinderModule } from './lead-finder/lead-finder.module';
 import { validate } from './env.validation';
 
 @Module({
@@ -82,6 +83,7 @@ import { validate } from './env.validation';
     PurchasesModule,
     SuppliersModule,
     ProformaInvoicesModule,
+    LeadFinderModule,
   ],
   controllers: [HealthController],
   providers: [
