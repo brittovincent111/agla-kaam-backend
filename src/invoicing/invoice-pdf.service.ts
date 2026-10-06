@@ -27,6 +27,8 @@ import {
   toRenderItems,
 } from '../common/pdf/document-render';
 import { renderDocument } from '../common/pdf/render-document';
+import { buildUpiLink } from '../common/utils/upi';
+import { resolveGstSupply } from '../common/pdf/place-of-supply';
 import { PAYMENT_METHOD_LABELS } from '../common/constants/invoice-options';
 
 // All drawing lives in common/pdf — this service's only job is to describe an
@@ -44,6 +46,7 @@ import { PAYMENT_METHOD_LABELS } from '../common/constants/invoice-options';
 // undefined means "show", so output is unchanged for a business that has
 // never touched the settings screen.
 type InvoiceRenderBusiness = RenderBusiness & {
+  invoiceTopMessage?: string;
   invoiceShowDiscount?: boolean;
   invoiceShowTax?: boolean;
   invoiceShowBankInfo?: boolean;
@@ -94,14 +97,21 @@ export class InvoicePdfService {
     ]);
 
     let paymentQrBuffer: Buffer | undefined;
-    const qrText =
-      business.paymentQrContent ||
-      (business.paymentUpiId
-        ? `upi://pay?pa=${business.paymentUpiId}&pn=${encodeURIComponent(business.name)}`
-        : undefined);
+    // Pre-filled with what is still owed and the invoice number, so scanning
+    // opens the customer's UPI app ready to pay this bill.
+    const qrText = buildUpiLink({
+      upiIdOrLink: business.paymentQrContent || business.paymentUpiId || '',
+      payeeName: business.name,
+      amount: invoice.balanceDue > 0 ? invoice.balanceDue : undefined,
+      note: invoice.invoiceNumber,
+      currency: invoice.currency || business.currency,
+    });
     if (qrText) {
       try {
-        paymentQrBuffer = await QRCode.toBuffer(qrText, { margin: 1, width: 200 });
+        paymentQrBuffer = await QRCode.toBuffer(qrText, {
+          margin: 1,
+          width: 200,
+        });
       } catch {
         // Fallback silently if QR encoding fails
       }
@@ -149,8 +159,7 @@ export class InvoicePdfService {
     )[0]!;
 
     const technician = latest.assignedTechnicianId as unknown as
-      | { name?: string }
-      | undefined;
+      { name?: string } | undefined;
 
     return {
       technicianName: technician?.name,
@@ -207,17 +216,34 @@ export class InvoicePdfService {
       { label: 'Due Date', value: formatDate(invoice.dueDate, country) },
     ];
 
+    // Indian GST only: the state each party is in decides CGST + SGST versus
+    // IGST, and a tax invoice states its place of supply.
+    const supply = resolveGstSupply(taxType, country, business, customer);
+    if (supply?.placeOfSupply) {
+      metaRows.push({ label: 'Place of Supply', value: supply.placeOfSupply });
+    }
+
     // Per-document-type display settings. Undefined means on, so a business
     // that has never opened the settings screen keeps the previous output.
     const showDiscount = business.invoiceShowDiscount !== false;
     const showTax = business.invoiceShowTax !== false;
 
-    const totals: RenderTotalRow[] = [{ label: 'Subtotal', value: invoice.subtotal }];
+    const totals: RenderTotalRow[] = [
+      { label: 'Subtotal', value: invoice.subtotal },
+    ];
     if (showDiscount && invoice.discount > 0) {
-      totals.push({ label: 'Discount', value: invoice.discount, negative: true });
+      totals.push({
+        label: 'Discount',
+        value: invoice.discount,
+        negative: true,
+      });
     }
     if (showTax) {
-      totals.push(...buildTaxRows(taxType, invoice.taxTotal, invoice.items));
+      totals.push(
+        ...buildTaxRows(taxType, invoice.taxTotal, invoice.items, {
+          interState: supply?.interState,
+        }),
+      );
     }
     totals.push({
       label: 'Total',
@@ -229,7 +255,11 @@ export class InvoicePdfService {
     // Only shown once something has actually been paid — an untouched invoice
     // does not need a "Paid 0.00 / Balance = Total" restatement.
     if (invoice.amountPaid > 0) {
-      totals.push({ label: 'Amount paid', value: invoice.amountPaid, negative: true });
+      totals.push({
+        label: 'Amount paid',
+        value: invoice.amountPaid,
+        negative: true,
+      });
       totals.push({
         label: 'Balance due',
         value: invoice.balanceDue,
@@ -262,14 +292,23 @@ export class InvoicePdfService {
       taxType,
       country,
       // The business's own sign-off when it has set one.
+      topMessage: business.invoiceTopMessage,
       footerNote:
         business.invoiceBottomMessage?.trim() ||
         `Thank you for your business — ${business.name}`,
       serviceContext: extras.serviceContext,
-      payment: extras.payment ? { ...extras.payment, paidLabel } : paidLabel ? { paidLabel } : undefined,
+      payment: extras.payment
+        ? { ...extras.payment, paidLabel }
+        : paidLabel
+          ? { paidLabel }
+          : undefined,
       hasTax:
-        showTax && taxType !== 'none' && invoice.items.some((item) => item.taxRate > 0),
+        showTax &&
+        taxType !== 'none' &&
+        invoice.items.some((item) => item.taxRate > 0),
       taxLabel: taxTypeName(taxType),
+      supply,
+      discount: invoice.discount,
       show: { hsn: business.invoiceShowHsn === true },
     };
 

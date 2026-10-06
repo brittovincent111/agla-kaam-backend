@@ -42,10 +42,13 @@ describe('ServicesService.upcomingServiceSummaries', () => {
     sort = jest.fn().mockImplementation(() => ({
       exec: jest.fn().mockImplementation(async () => {
         // Mimic Mongo: return the rows in the order the requested sort implies.
-        const [[key, dir]] = Object.entries(sort.mock.calls.at(-1)![0] as Record<string, number>);
+        const [[key, dir]] = Object.entries(
+          sort.mock.calls.at(-1)![0] as Record<string, number>,
+        );
         return [...rows].sort(
           (a, b) =>
-            (new Date(a[key]).getTime() - new Date(b[key]).getTime()) * (dir as number),
+            (new Date(a[key]).getTime() - new Date(b[key]).getTime()) *
+            (dir as number),
         );
       }),
     }));
@@ -68,12 +71,18 @@ describe('ServicesService.upcomingServiceSummaries', () => {
 
   it('picks the soonest-due service, not the most recently logged one', async () => {
     // Logged today, but not due for a year.
-    rows.push(row('c1', 's-recent', 'RO Filter Change', '2026-09-09', '2027-09-09'));
+    rows.push(
+      row('c1', 's-recent', 'RO Filter Change', '2026-09-09', '2027-09-09'),
+    );
     // Logged months ago and already overdue — this is the one the customer
     // row must show, because it is the one that needs attention.
-    rows.push(row('c1', 's-overdue', 'AC General Service', '2026-03-01', '2026-08-10'));
+    rows.push(
+      row('c1', 's-overdue', 'AC General Service', '2026-03-01', '2026-08-10'),
+    );
 
-    const summaries = await service.upcomingServiceSummaries(businessId, ['c1']);
+    const summaries = await service.upcomingServiceSummaries(businessId, [
+      'c1',
+    ]);
 
     expect(summaries.get('c1')?._id).toBe('s-overdue');
     expect(summaries.get('c1')?.serviceType).toBe('AC General Service');
@@ -92,7 +101,10 @@ describe('ServicesService.upcomingServiceSummaries', () => {
     rows.push(row('c1', 's2', 'AC', '2026-02-01', '2026-07-01'));
     rows.push(row('c2', 's3', 'RO', '2026-01-01', '2026-05-01'));
 
-    const summaries = await service.upcomingServiceSummaries(businessId, ['c1', 'c2']);
+    const summaries = await service.upcomingServiceSummaries(businessId, [
+      'c1',
+      'c2',
+    ]);
 
     expect(summaries.size).toBe(2);
     expect(summaries.get('c1')?._id).toBe('s1');

@@ -25,7 +25,10 @@ export class DeduplicationService {
    * Normalizes a phone number to standard E.164.
    * Recognizes Indian numbers (+91, 0, 091, bare 10-digits) and international formats.
    */
-  normalizePhoneNumber(rawPhone?: string, defaultCountry = 'India'): string | undefined {
+  normalizePhoneNumber(
+    rawPhone?: string,
+    defaultCountry = 'India',
+  ): string | undefined {
     if (!rawPhone) return undefined;
 
     const trimmed = rawPhone.trim();
@@ -99,9 +102,13 @@ export class DeduplicationService {
    */
   async findDuplicateAndEnrich(
     candidate: NormalizedBusinessLead,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     jobId?: string,
   ): Promise<DeduplicationResult> {
-    const phoneNorm = this.normalizePhoneNumber(candidate.phone, candidate.country);
+    const phoneNorm = this.normalizePhoneNumber(
+      candidate.phone,
+      candidate.country,
+    );
     const nameNorm = this.normalizeBusinessName(candidate.businessName);
     const cityNorm = this.normalizeCity(candidate.city);
 
@@ -125,8 +132,14 @@ export class DeduplicationService {
     }
 
     // Priority 2: Normalized Phone Number (excluding common toll-free / call centers)
-    if (phoneNorm && !phoneNorm.includes('1800') && !phoneNorm.includes('1860')) {
-      const match = await this.leadModel.findOne({ phoneNormalized: phoneNorm });
+    if (
+      phoneNorm &&
+      !phoneNorm.includes('1800') &&
+      !phoneNorm.includes('1860')
+    ) {
+      const match = await this.leadModel.findOne({
+        phoneNormalized: phoneNorm,
+      });
       if (match) {
         const enriched = await this.enrichExistingLead(match, candidate);
         return {
@@ -180,7 +193,10 @@ export class DeduplicationService {
     }
     if (!existing.phone && incoming.phone) {
       existing.phone = incoming.phone;
-      existing.phoneNormalized = this.normalizePhoneNumber(incoming.phone, incoming.country);
+      existing.phoneNormalized = this.normalizePhoneNumber(
+        incoming.phone,
+        incoming.country,
+      );
       (existing as any).phoneType = incoming.phoneType;
       updated = true;
     }

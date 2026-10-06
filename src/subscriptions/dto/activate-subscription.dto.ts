@@ -1,5 +1,8 @@
 import { IsBoolean, IsIn, IsOptional } from 'class-validator';
-import { SUBSCRIPTION_TIERS, SubscriptionTier } from '../../common/constants/subscription-options';
+import {
+  SUBSCRIPTION_TIERS,
+  SubscriptionTier,
+} from '../../common/constants/subscription-options';
 
 export class ActivateSubscriptionDto {
   @IsIn(SUBSCRIPTION_TIERS)

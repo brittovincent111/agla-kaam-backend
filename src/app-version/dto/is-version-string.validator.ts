@@ -1,4 +1,7 @@
-import { ValidatorConstraint, ValidatorConstraintInterface } from 'class-validator';
+import {
+  ValidatorConstraint,
+  ValidatorConstraintInterface,
+} from 'class-validator';
 import { isValidVersion } from '../../common/utils/semver';
 
 @ValidatorConstraint({ name: 'isVersionString', async: false })

@@ -5,6 +5,7 @@ import {
   IsString,
   MaxLength,
   MinLength,
+  ValidateIf,
 } from 'class-validator';
 
 export class CreateTeamMemberDto {
@@ -13,16 +14,22 @@ export class CreateTeamMemberDto {
   @MaxLength(100)
   name: string;
 
+  // Optional now: a technician can sign in with their phone number instead.
+  // One of the two is required.
+  @ValidateIf((o: CreateTeamMemberDto) => !!o.email || !o.phone)
   @IsEmail()
-  email: string;
+  email?: string;
 
+  // Six is enough for a password the owner picks and passes on by hand; the
+  // login route is rate-limited per device.
   @IsString()
-  @MinLength(8)
+  @MinLength(6)
   @MaxLength(72)
   password: string;
 
-  @IsOptional()
+  @ValidateIf((o: CreateTeamMemberDto) => !o.email || !!o.phone)
   @IsString()
+  @MinLength(8)
   @MaxLength(20)
   phone?: string;
 

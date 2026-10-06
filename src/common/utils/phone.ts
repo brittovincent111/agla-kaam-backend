@@ -26,13 +26,34 @@ export function toWhatsAppNumber(raw: string): string {
   const digits = trimmed.replace(/\D/g, '');
   if (!digits) return '';
 
-  // If number already contains country code (length > 10 and starts with GCC/international prefix)
-  const knownPrefixes = ['971', '966', '974', '968', '965', '973', '91', '1', '44'];
-  const hasKnownPrefix = knownPrefixes.some((p) => digits.startsWith(p) && digits.length >= (p.length + 7));
+  // A bare number of Indian length is Indian, whatever it starts with:
+  // "97412 34567" is a Jio number, not Qatar, and "96xxxxxxxx" not Saudi.
+  if (digits.length === 10) return `${DEFAULT_COUNTRY_CODE}${digits}`;
+  if (digits.length === 11 && digits.startsWith('0')) {
+    return `${DEFAULT_COUNTRY_CODE}${digits.slice(1)}`;
+  }
+
+  // Longer than a local number: it already carries a country code. A
+  // pasted "+91" on top of "91…" (14 digits) loses the repeat.
+  if (digits.length === 14 && digits.startsWith('9191')) return digits.slice(2);
+  const knownPrefixes = [
+    '971',
+    '966',
+    '974',
+    '968',
+    '965',
+    '973',
+    '91',
+    '1',
+    '44',
+  ];
+  const hasKnownPrefix = knownPrefixes.some(
+    (p) => digits.startsWith(p) && digits.length >= p.length + 7,
+  );
   if (hasKnownPrefix) {
     return digits;
   }
 
-  // Fallback for bare local 10-digit numbers without country code
+  // Anything else is taken as a local number.
   return `${DEFAULT_COUNTRY_CODE}${digits.replace(/^0+/, '')}`;
 }

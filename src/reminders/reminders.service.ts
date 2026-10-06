@@ -9,21 +9,51 @@ import {
   BusinessDocument,
 } from '../businesses/schemas/business.schema';
 import {
-  DEFAULT_CARD_TEMPLATE,
-  DEFAULT_PAYMENT_REMINDER_TEMPLATE,
-  DEFAULT_REMINDER_TEMPLATE,
+  DEFAULT_TEMPLATES,
+  MessageLanguage,
+  dueWording,
+  messageLanguage,
   renderMessageTemplate,
+  slotWording,
 } from '../common/utils/message-template';
 import { toWhatsAppNumber } from '../common/utils/phone';
 import { BusinessesService } from '../businesses/businesses.service';
 import { TeamMembersService } from '../team-members/team-members.service';
 import { ExpoPushService, PushMessage } from '../common/push/expo-push.service';
-import { isSendHourIn, startOfLocalDay } from '../common/utils/timezone';
+import { DEFAULT_TIMEZONE, isSendHourIn, startOfLocalDay } from '../common/utils/timezone';
 
 function addDays(date: Date, days: number): Date {
   const d = new Date(date);
   d.setDate(d.getDate() + days);
   return d;
+}
+
+function startOfDay(date: Date): Date {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+// Dates inside a message, in the message's language: "30 Sept 2026" /
+// "30 सित॰ 2026".
+//
+// Read in the business's timezone (India by default): the server runs in UTC,
+// and a date saved as local midnight would otherwise print as the day before.
+export function formatMessageDate(
+  date: Date,
+  lang: MessageLanguage = 'en',
+  timezone: string = DEFAULT_TIMEZONE,
+): string {
+  const opts: Intl.DateTimeFormatOptions = {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  };
+  try {
+    return new Date(date).toLocaleDateString(lang === 'hi' ? 'hi-IN' : 'en-IN', { ...opts, timeZone: timezone });
+  } catch {
+    return new Date(date).toLocaleDateString(lang === 'hi' ? 'hi-IN' : 'en-IN', { ...opts, timeZone: DEFAULT_TIMEZONE });
+  }
 }
 
 // 8 AM in the business's own timezone — early enough to plan the day, late
@@ -43,27 +73,54 @@ export class RemindersService {
     private readonly expoPushService: ExpoPushService,
   ) {}
 
-  dueToday(businessId: string, viewer?: AuthenticatedBusiness, timezone?: string) {
+  // The business's own timezone, for "today" and dates in messages.
+  private async timezoneOf(businessId: string): Promise<string> {
+    const b = await this.businessModel.findById(businessId).select('timezone').lean().exec().catch(() => null);
+    return (b as { timezone?: string } | null)?.timezone || DEFAULT_TIMEZONE;
+  }
+
+  dueToday(
+    businessId: string,
+    viewer?: AuthenticatedBusiness,
+    timezone?: string,
+  ) {
     const from = startOfLocalDay(timezone, new Date());
     const to = addDays(from, 1);
     return this.servicesService.findDueBetween(businessId, from, to, viewer);
   }
 
-  dueSoon(businessId: string, days: number, viewer?: AuthenticatedBusiness, timezone?: string) {
+  dueSoon(
+    businessId: string,
+    days: number,
+    viewer?: AuthenticatedBusiness,
+    timezone?: string,
+  ) {
     const from = addDays(startOfLocalDay(timezone, new Date()), 1);
     const to = addDays(startOfLocalDay(timezone, new Date()), days + 1);
     return this.servicesService.findDueBetween(businessId, from, to, viewer);
   }
 
-  overdue(businessId: string, viewer?: AuthenticatedBusiness, timezone?: string) {
+  overdue(
+    businessId: string,
+    viewer?: AuthenticatedBusiness,
+    timezone?: string,
+  ) {
     const before = startOfLocalDay(timezone, new Date());
     return this.servicesService.findOverdue(businessId, before, viewer);
   }
 
   // "Expiring soon" window matches the client's warranty-status bucketing (14 days).
-  warrantyAlerts(businessId: string, viewer?: AuthenticatedBusiness, timezone?: string) {
+  warrantyAlerts(
+    businessId: string,
+    viewer?: AuthenticatedBusiness,
+    timezone?: string,
+  ) {
     const expiringBefore = addDays(startOfLocalDay(timezone, new Date()), 14);
-    return this.servicesService.findWarrantyAlerts(businessId, expiringBefore, viewer);
+    return this.servicesService.findWarrantyAlerts(
+      businessId,
+      expiringBefore,
+      viewer,
+    );
   }
 
   /**
@@ -82,7 +139,7 @@ export class RemindersService {
   ) {
     const days = options.days ?? 7;
     const limit = Math.min(Math.max(options.limit ?? 20, 1), 50);
-    const { timezone } = options;
+    const timezone = options.timezone ?? (await this.timezoneOf(businessId));
     const startOfToday = startOfLocalDay(timezone, new Date());
     const tomorrow = addDays(startOfToday, 1);
     const soonEnd = addDays(startOfToday, days + 1);
@@ -110,9 +167,26 @@ export class RemindersService {
       warrantyTotal,
     ] = await Promise.all([
       this.servicesService.findOverdue(businessId, startOfToday, viewer, limit),
-      this.servicesService.findDueBetween(businessId, startOfToday, tomorrow, viewer, limit),
-      this.servicesService.findDueBetween(businessId, tomorrow, soonEnd, viewer, limit),
-      this.servicesService.findWarrantyAlerts(businessId, warrantyBefore, viewer, limit),
+      this.servicesService.findDueBetween(
+        businessId,
+        startOfToday,
+        tomorrow,
+        viewer,
+        limit,
+      ),
+      this.servicesService.findDueBetween(
+        businessId,
+        tomorrow,
+        soonEnd,
+        viewer,
+        limit,
+      ),
+      this.servicesService.findWarrantyAlerts(
+        businessId,
+        warrantyBefore,
+        viewer,
+        limit,
+      ),
       // Pending-only for the three due feeds, so the counts match the rows.
       // Warranty alerts stay on the default (not-cancelled): a warranty
       // exists only on work already carried out.
@@ -134,7 +208,11 @@ export class RemindersService {
         viewer,
         ServicesService.PENDING_ONLY,
       ),
-      this.servicesService.countReminders(businessId, windows.warrantyAlerts, viewer),
+      this.servicesService.countReminders(
+        businessId,
+        windows.warrantyAlerts,
+        viewer,
+      ),
     ]);
 
     return {
@@ -147,15 +225,66 @@ export class RemindersService {
     };
   }
 
-  buildWhatsAppMessage(
-    vars: { customerName: string; businessName: string; serviceType: string; nextServiceDate: string },
-    template?: string,
-  ): string {
-    return renderMessageTemplate(template?.trim() || DEFAULT_REMINDER_TEMPLATE, vars);
+  // --- Message building ---------------------------------------------------
+  //
+  // Every WhatsApp text the app prepares is assembled here, in the business's
+  // chosen language, from the business's own template where it has one.
+
+  /**
+   * "Service due" for a visit that has not been done. The date is the date
+   * THIS visit is due (serviceDate) — nextServiceDate is the visit after it,
+   * which is what reminders used to print. Wording precedence: the service
+   * type's own preset message, then the business-wide reminder, then ours;
+   * a second reminder for the same visit uses the gentler follow-up unless
+   * the business has written its own.
+   */
+  buildServiceDueMessage(input: {
+    service: {
+      serviceType: string;
+      serviceDate: Date;
+      lastRemindedAt?: Date | null;
+      booked?: boolean;
+      visitSlot?: string;
+    };
+    customerName: string;
+    business: { name: string; language?: string; reminderTemplate?: string };
+    presetTemplate?: string;
+  }): string {
+    const lang = messageLanguage(input.business.language);
+    const dueDate = formatMessageDate(input.service.serviceDate, lang);
+    // Booked (the customer agreed a day) and still ahead: a confirmation.
+    // "Shall we book a visit?" to someone who already booked one confuses them.
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (
+      input.service.booked === true &&
+      new Date(input.service.serviceDate) >= today
+    ) {
+      return renderMessageTemplate(DEFAULT_TEMPLATES.visitConfirm[lang], {
+        customerName: input.customerName,
+        businessName: input.business.name,
+        serviceType: input.service.serviceType,
+        dueDate,
+        slotText: slotWording(lang, input.service.visitSlot),
+      });
+    }
+    const custom =
+      input.presetTemplate?.trim() || input.business.reminderTemplate?.trim();
+    const template =
+      custom ||
+      (input.service.lastRemindedAt
+        ? DEFAULT_TEMPLATES.reminderFollowUp[lang]
+        : DEFAULT_TEMPLATES.reminder[lang]);
+    return renderMessageTemplate(template, {
+      customerName: input.customerName,
+      businessName: input.business.name,
+      serviceType: input.service.serviceType,
+      dueDate,
+      // Alias kept for templates written with the old "Next due date" chip.
+      nextServiceDate: dueDate,
+    });
   }
 
-  // The service-card share. Same renderer and the same override mechanism as
-  // the reminder above, so the two can no longer drift.
   buildServiceCardMessage(
     vars: {
       customerName: string;
@@ -168,31 +297,117 @@ export class RemindersService {
       nextServiceDate: string;
       businessContact: string;
       reviewLine?: string;
+      // "Your service record: <link>", with its own leading newlines.
+      recordLine?: string;
+      // "Amount ₹… — pay here: <link>" when the job has been invoiced.
+      invoiceLine?: string;
     },
     template?: string,
+    language?: string,
   ): string {
-    return renderMessageTemplate(template?.trim() || DEFAULT_CARD_TEMPLATE, {
+    const lang = messageLanguage(language);
+    let chosen = template?.trim() || DEFAULT_TEMPLATES.card[lang];
+    // The record link is what the customer keeps and books again from, so a
+    // custom message that does not place it still gets it, at the end.
+    if (vars.recordLine && !chosen.includes('{recordLine}'))
+      chosen += '{recordLine}';
+    // Same for the bill: a job's record and its invoice go in one message.
+    if (vars.invoiceLine && !chosen.includes('{invoiceLine}'))
+      chosen += '{invoiceLine}';
+    return renderMessageTemplate(chosen, {
       ...vars,
       reviewLine: vars.reviewLine ?? '',
+      recordLine: vars.recordLine ?? '',
+      invoiceLine: vars.invoiceLine ?? '',
     });
   }
 
-  // The invoice chase. Same renderer and override mechanism as the two
-  // service messages, so all three stay consistent.
-  buildPaymentReminderMessage(
-    vars: {
-      customerName: string;
-      businessName: string;
-      invoiceNumber: string;
-      balanceDue: string;
-      dueDate: string;
-    },
-    template?: string,
-  ): string {
+  buildPaymentReminderMessage(input: {
+    customerName: string;
+    businessName: string;
+    invoiceNumber: string;
+    balanceDue: string;
+    dueDate: Date;
+    language?: string;
+    template?: string;
+    upiId?: string;
+    invoiceUrl?: string;
+  }): string {
+    const lang = messageLanguage(input.language);
+    const dueDate = formatMessageDate(input.dueDate, lang);
+    const isPast =
+      startOfDay(input.dueDate).getTime() < startOfDay(new Date()).getTime();
+    const paymentLine = input.upiId
+      ? lang === 'hi'
+        ? `\n\nUPI से भुगतान करें: ${input.upiId}`
+        : `\n\nPay by UPI: ${input.upiId}`
+      : '';
+    const invoiceLink = input.invoiceUrl
+      ? lang === 'hi'
+        ? `\nऑनलाइन भुगतान करें या इनवॉइस देखें: ${input.invoiceUrl}`
+        : `\nPay online or view the invoice: ${input.invoiceUrl}`
+      : '';
     return renderMessageTemplate(
-      template?.trim() || DEFAULT_PAYMENT_REMINDER_TEMPLATE,
-      vars,
+      input.template?.trim() || DEFAULT_TEMPLATES.payment[lang],
+      {
+        customerName: input.customerName,
+        businessName: input.businessName,
+        invoiceNumber: input.invoiceNumber,
+        balanceDue: input.balanceDue,
+        dueDate,
+        dueLine: dueWording(lang, dueDate, isPast),
+        paymentLine,
+        invoiceLink,
+      },
     );
+  }
+
+  /**
+   * Job dispatch to a technician. Built here so the three screens that send
+   * it say the same thing. The map link uses the saved GPS pin when there is
+   * one — an exact point — and falls back to searching the typed address.
+   */
+  buildDispatchMessage(input: {
+    businessName: string;
+    language?: string;
+    technicianName: string;
+    customer: {
+      name: string;
+      phone?: string;
+      address?: string;
+      location?: { latitude: number; longitude: number } | null;
+    };
+    serviceType: string;
+    dueDate: Date;
+    visitSlot?: string;
+    notes?: string;
+  }): string {
+    const lang = messageLanguage(input.language);
+    const { customer } = input;
+    const pin = customer.location;
+    const mapUrl = pin
+      ? `https://maps.google.com/?q=${pin.latitude},${pin.longitude}`
+      : customer.address
+        ? `https://maps.google.com/?q=${encodeURIComponent(customer.address)}`
+        : '';
+    const label = (en: string, hi: string) => (lang === 'hi' ? hi : en);
+    return renderMessageTemplate(DEFAULT_TEMPLATES.dispatch[lang], {
+      businessName: input.businessName,
+      technicianName: input.technicianName,
+      customerName: customer.name,
+      customerPhone: customer.phone || '—',
+      serviceType: input.serviceType,
+      dueDate:
+        formatMessageDate(input.dueDate, lang) +
+        slotWording(lang, input.visitSlot),
+      addressLine: customer.address
+        ? `📍 *${label('Address', 'पता')}:* ${customer.address}\n`
+        : '',
+      mapLine: mapUrl ? `🗺️ *${label('Map', 'मैप')}:* ${mapUrl}\n` : '',
+      notesLine: input.notes?.trim()
+        ? `📝 *${label('Notes', 'नोट्स')}:* ${input.notes.trim()}\n`
+        : '',
+    });
   }
 
   buildWhatsAppLink(phone: string, message: string): string {
@@ -227,7 +442,11 @@ export class RemindersService {
       const businessId = business.id as string;
 
       // Owner: everything due across the whole business.
-      const ownerDue = await this.dueToday(businessId, undefined, business.timezone);
+      const ownerDue = await this.dueToday(
+        businessId,
+        undefined,
+        business.timezone,
+      );
       if (ownerDue.length && business.pushToken) {
         messages.push(this.buildDuePush(business.pushToken, ownerDue.length));
       }
@@ -248,7 +467,9 @@ export class RemindersService {
           business.timezone,
         );
         if (theirDue.length) {
-          messages.push(this.buildDuePush(technician.pushToken, theirDue.length));
+          messages.push(
+            this.buildDuePush(technician.pushToken, theirDue.length),
+          );
         }
       }
     }

@@ -4,7 +4,9 @@ import { splitClearableUpdate } from './clearable-update';
 // bank account or UPI id printing on every invoice is worse than none at all.
 describe('splitClearableUpdate', () => {
   it('writes ordinary values with $set', () => {
-    expect(splitClearableUpdate({ name: 'CoolBreeze', acceptsCash: true })).toEqual({
+    expect(
+      splitClearableUpdate({ name: 'CoolBreeze', acceptsCash: true }),
+    ).toEqual({
       $set: { name: 'CoolBreeze', acceptsCash: true },
     });
   });
@@ -30,13 +32,19 @@ describe('splitClearableUpdate', () => {
         acceptsCash: false,
       }),
     ).toEqual({
-      $set: { name: 'CoolBreeze', paymentUpiId: 'cool@okaxis', acceptsCash: false },
+      $set: {
+        name: 'CoolBreeze',
+        paymentUpiId: 'cool@okaxis',
+        acceptsCash: false,
+      },
       $unset: { paymentAccountNumber: '' },
     });
   });
 
   it('ignores keys that were not sent at all', () => {
-    expect(splitClearableUpdate({ name: 'CoolBreeze', paymentUpiId: undefined })).toEqual({
+    expect(
+      splitClearableUpdate({ name: 'CoolBreeze', paymentUpiId: undefined }),
+    ).toEqual({
       $set: { name: 'CoolBreeze' },
     });
   });

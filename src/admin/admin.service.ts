@@ -1,14 +1,32 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { createHash, timingSafeEqual } from 'node:crypto';
+import {
+  BadRequestException,
+  Injectable,
+  ServiceUnavailableException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { Business, BusinessDocument } from '../businesses/schemas/business.schema';
-import { Subscription, SubscriptionDocument } from '../subscriptions/schemas/subscription.schema';
-import { Customer, CustomerDocument } from '../customers/schemas/customer.schema';
+import {
+  Business,
+  BusinessDocument,
+} from '../businesses/schemas/business.schema';
+import {
+  Subscription,
+  SubscriptionDocument,
+} from '../subscriptions/schemas/subscription.schema';
+import {
+  Customer,
+  CustomerDocument,
+} from '../customers/schemas/customer.schema';
 import { Service, ServiceDocument } from '../services/schemas/service.schema';
 import { Invoice, InvoiceDocument } from '../invoicing/schemas/invoice.schema';
-import { AppFeedback, AppFeedbackDocument } from '../app-feedback/schemas/app-feedback.schema';
+import {
+  AppFeedback,
+  AppFeedbackDocument,
+} from '../app-feedback/schemas/app-feedback.schema';
 import { AdminLoginDto } from './dto/admin-login.dto';
 import { isFetchPolyfilled } from '../common/http/fetch-polyfill';
 
@@ -25,22 +43,46 @@ export class AdminService {
   constructor(
     private readonly configService: ConfigService,
     private readonly jwtService: JwtService,
-    @InjectModel(Business.name) private readonly businessModel: Model<BusinessDocument>,
-    @InjectModel(Subscription.name) private readonly subscriptionModel: Model<SubscriptionDocument>,
-    @InjectModel(Customer.name) private readonly customerModel: Model<CustomerDocument>,
-    @InjectModel(Service.name) private readonly serviceModel: Model<ServiceDocument>,
-    @InjectModel(Invoice.name) private readonly invoiceModel: Model<InvoiceDocument>,
-    @InjectModel(AppFeedback.name) private readonly feedbackModel: Model<AppFeedbackDocument>,
+    @InjectModel(Business.name)
+    private readonly businessModel: Model<BusinessDocument>,
+    @InjectModel(Subscription.name)
+    private readonly subscriptionModel: Model<SubscriptionDocument>,
+    @InjectModel(Customer.name)
+    private readonly customerModel: Model<CustomerDocument>,
+    @InjectModel(Service.name)
+    private readonly serviceModel: Model<ServiceDocument>,
+    @InjectModel(Invoice.name)
+    private readonly invoiceModel: Model<InvoiceDocument>,
+    @InjectModel(AppFeedback.name)
+    private readonly feedbackModel: Model<AppFeedbackDocument>,
   ) {}
 
-  async login(dto: AdminLoginDto): Promise<{ accessToken: string; admin: { email: string } }> {
-    const adminEmail = this.configService.get<string>('ADMIN_EMAIL') ?? 'admin@velocrew.in';
-    const adminPassword = this.configService.get<string>('ADMIN_PASSWORD') ?? 'velocrew@admin2026';
+  async login(
+    dto: AdminLoginDto,
+  ): Promise<{ accessToken: string; admin: { email: string } }> {
+    const adminEmail = this.configService.get<string>('ADMIN_EMAIL');
+    const adminPassword = this.configService.get<string>('ADMIN_PASSWORD');
 
-    if (
-      dto.email.trim().toLowerCase() !== adminEmail.trim().toLowerCase() ||
-      dto.password !== adminPassword
-    ) {
+    // No literal fallbacks. These used to default to a real address and
+    // password committed in this file, and because the production environment
+    // never set the variables, those defaults were the live credentials for
+    // the whole SaaS admin panel — every business's PII, subscription edits,
+    // CSV export and push broadcast. Refusing to run beats guessing.
+    if (!adminEmail || !adminPassword) {
+      throw new ServiceUnavailableException(
+        'Admin login is not configured on this server.',
+      );
+    }
+
+    // Both compared in constant time. A plain !== leaks how much of the
+    // secret matched through timing, which is what makes a password
+    // guessable one character at a time.
+    const emailOk = safeEqual(
+      dto.email.trim().toLowerCase(),
+      adminEmail.trim().toLowerCase(),
+    );
+    const passwordOk = safeEqual(dto.password, adminPassword);
+    if (!emailOk || !passwordOk) {
       throw new UnauthorizedException('Invalid admin credentials.');
     }
 
@@ -88,7 +130,9 @@ export class AdminService {
       this.invoiceModel.countDocuments(),
       this.invoiceModel.aggregate([
         { $match: { status: { $ne: 'cancelled' } } },
-        { $group: { _id: null, totalInvoiced: { $sum: '$grandTotal' } } },
+        // InvoiceSchema's field is `total`; `grandTotal` does not exist, so this
+        // summed nothing and the dashboard always reported zero revenue.
+        { $group: { _id: null, totalInvoiced: { $sum: '$total' } } },
       ]),
       this.subscriptionModel.find({ status: 'active' }).exec(),
       this.businessModel.aggregate([
@@ -170,7 +214,12 @@ export class AdminService {
 
     if (search && search.trim() !== '') {
       const regex = new RegExp(search.trim(), 'i');
-      query.$or = [{ name: regex }, { email: regex }, { phone: regex }, { tradeType: regex }];
+      query.$or = [
+        { name: regex },
+        { email: regex },
+        { phone: regex },
+        { tradeType: regex },
+      ];
     }
 
     const [items, total] = await Promise.all([
@@ -179,7 +228,9 @@ export class AdminService {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .select('name tradeType email phone subscriptionStatus gstin address createdAt')
+        .select(
+          'name tradeType email phone subscriptionStatus gstin address createdAt',
+        )
         .exec(),
       this.businessModel.countDocuments(query),
     ]);
@@ -230,6 +281,8 @@ export class AdminService {
     subscriptionStatus: 'free' | 'active' | 'expired',
     tier?: string,
     customRenewalDate?: string | Date,
+    teamEnabled?: boolean,
+    teamSeatLimit?: number | null,
   ) {
     const business = await this.businessModel.findById(businessId);
     if (!business) {
@@ -240,7 +293,15 @@ export class AdminService {
     await business.save();
 
     if (tier || subscriptionStatus === 'active') {
-      const selectedTier = tier || 'combo';
+      // The old form sent 'combo_team', which is not a tier: Combo with Team.
+      const wantsTeam = tier === 'combo_team' || teamEnabled === true;
+      const selectedTier = (tier === 'combo_team' || !tier ? 'combo' : tier) as 'reminders' | 'invoicing' | 'combo';
+      if (!['reminders', 'invoicing', 'combo'].includes(selectedTier)) {
+        throw new BadRequestException(`Unknown plan "${tier}".`);
+      }
+      if (wantsTeam && selectedTier !== 'combo') {
+        throw new BadRequestException('Team is only available with Combo.');
+      }
       let renewalDate = new Date();
       if (customRenewalDate) {
         renewalDate = new Date(customRenewalDate);
@@ -248,15 +309,24 @@ export class AdminService {
         renewalDate.setFullYear(renewalDate.getFullYear() + 1);
       }
 
-      await this.subscriptionModel.findOneAndUpdate(
-        { businessId: business._id },
-        {
-          tier: selectedTier,
-          status: subscriptionStatus === 'active' ? 'active' : 'expired',
-          renewalDate,
-        },
-        { upsert: true, new: true },
-      );
+      // The app reads the newest subscription, so edit that one (or start one).
+      const current = await this.subscriptionModel
+        .findOne({ businessId: business._id })
+        .sort({ createdAt: -1 })
+        .exec();
+      const fields = {
+        tier: selectedTier,
+        status: (subscriptionStatus === 'active' ? 'active' : 'expired') as 'active' | 'expired',
+        renewalDate,
+        ...(teamEnabled !== undefined || tier === 'combo_team' ? { teamEnabled: wantsTeam } : {}),
+      };
+      if (current) await this.subscriptionModel.updateOne({ _id: current._id }, { $set: fields }, { runValidators: true });
+      else await this.subscriptionModel.create({ businessId: business._id, teamEnabled: wantsTeam, ...fields });
+    }
+
+    if (teamSeatLimit !== undefined) {
+      business.teamSeatLimit = teamSeatLimit ?? undefined;
+      await business.save();
     }
 
     return {
@@ -271,12 +341,13 @@ export class AdminService {
       throw new UnauthorizedException('Business not found.');
     }
 
-    const [customersCount, servicesCount, invoicesCount, subscriptionDoc] = await Promise.all([
-      this.customerModel.countDocuments({ businessId: business._id }),
-      this.serviceModel.countDocuments({ businessId: business._id }),
-      this.invoiceModel.countDocuments({ businessId: business._id }),
-      this.subscriptionModel.findOne({ businessId: business._id }).exec(),
-    ]);
+    const [customersCount, servicesCount, invoicesCount, subscriptionDoc] =
+      await Promise.all([
+        this.customerModel.countDocuments({ businessId: business._id }),
+        this.serviceModel.countDocuments({ businessId: business._id }),
+        this.invoiceModel.countDocuments({ businessId: business._id }),
+        this.subscriptionModel.findOne({ businessId: business._id }).sort({ createdAt: -1 }).exec(),
+      ]);
 
     return {
       business,
@@ -286,17 +357,31 @@ export class AdminService {
         invoicesCount,
       },
       subscription: subscriptionDoc,
+      team: {
+        activeTechnicians: await this.teamMemberCount(business._id),
+        grantedSeats: business.teamSeatLimit ?? null,
+      },
     };
+  }
+
+  private async teamMemberCount(businessId: unknown): Promise<number> {
+    return this.subscriptionModel.db
+      .collection('teammembers')
+      .countDocuments({ businessId: { $in: [businessId, String(businessId)] }, active: true })
+      .catch(() => 0);
   }
 
   async exportBusinessesCsv(): Promise<string> {
     const businesses = await this.businessModel
       .find()
       .sort({ createdAt: -1 })
-      .select('name tradeType email phone subscriptionStatus gstin address createdAt')
+      .select(
+        'name tradeType email phone subscriptionStatus gstin address createdAt',
+      )
       .exec();
 
-    const headers = 'Business Name,Trade Category,Email,Phone,GSTIN,Subscription Status,Registered On\n';
+    const headers =
+      'Business Name,Trade Category,Email,Phone,GSTIN,Subscription Status,Registered On\n';
     const rows = businesses
       .map((b) => {
         const name = `"${(b.name || '').replace(/"/g, '""')}"`;
@@ -332,13 +417,20 @@ export class AdminService {
     };
   }
 
-  async broadcastPushNotification(title: string, body: string, tradeType?: string) {
+  async broadcastPushNotification(
+    title: string,
+    body: string,
+    tradeType?: string,
+  ) {
     const filter: any = { pushToken: { $exists: true, $ne: '' } };
     if (tradeType) {
       filter.tradeType = tradeType;
     }
 
-    const businesses = await this.businessModel.find(filter).select('pushToken').exec();
+    const businesses = await this.businessModel
+      .find(filter)
+      .select('pushToken')
+      .exec();
     const tokens = businesses.map((b) => b.pushToken).filter(Boolean);
 
     if (tokens.length === 0) {
@@ -395,4 +487,15 @@ export class AdminService {
       };
     }
   }
+}
+
+/**
+ * Length-independent constant-time comparison. timingSafeEqual throws when the
+ * buffers differ in length, so both sides are hashed to a fixed 32 bytes
+ * first — that also stops the length of the secret leaking.
+ */
+function safeEqual(a: string, b: string): boolean {
+  const ha = createHash('sha256').update(a, 'utf8').digest();
+  const hb = createHash('sha256').update(b, 'utf8').digest();
+  return timingSafeEqual(ha, hb);
 }

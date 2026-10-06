@@ -1,4 +1,8 @@
-import { isPhoneNumber, registerDecorator, ValidationOptions } from 'class-validator';
+import {
+  isPhoneNumber,
+  registerDecorator,
+  ValidationOptions,
+} from 'class-validator';
 
 // Accepts a phone number for any country this product is sold in.
 //

@@ -1,6 +1,9 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
-import { InvoiceItem, InvoiceItemSchema } from '../../invoicing/schemas/invoice-item.schema';
+import {
+  InvoiceItem,
+  InvoiceItemSchema,
+} from '../../invoicing/schemas/invoice-item.schema';
 
 export type ProformaInvoiceDocument = HydratedDocument<ProformaInvoice>;
 export type ProformaStatus = 'draft' | 'sent' | 'converted' | 'cancelled';
@@ -22,7 +25,12 @@ export class ProformaInvoice {
   @Prop({ required: true })
   validUntil: Date;
 
-  @Prop({ required: true, enum: ['draft', 'sent', 'converted', 'cancelled'], default: 'draft', index: true })
+  @Prop({
+    required: true,
+    enum: ['draft', 'sent', 'converted', 'cancelled'],
+    default: 'draft',
+    index: true,
+  })
   status: ProformaStatus;
 
   @Prop({ required: true, default: 'INR', uppercase: true, trim: true })
@@ -59,6 +67,10 @@ export class ProformaInvoice {
   convertedAt?: Date;
 }
 
-export const ProformaInvoiceSchema = SchemaFactory.createForClass(ProformaInvoice);
-ProformaInvoiceSchema.index({ businessId: 1, proformaNumber: 1 }, { unique: true });
+export const ProformaInvoiceSchema =
+  SchemaFactory.createForClass(ProformaInvoice);
+ProformaInvoiceSchema.index(
+  { businessId: 1, proformaNumber: 1 },
+  { unique: true },
+);
 ProformaInvoiceSchema.index({ businessId: 1, createdAt: -1 });

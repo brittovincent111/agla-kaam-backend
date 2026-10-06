@@ -13,6 +13,10 @@ export class SignupOtp {
 
   @Prop({ required: true, expires: '15m' })
   expiresAt: Date;
+
+  // Wrong codes tried; the code is deleted at MAX_CODE_ATTEMPTS.
+  @Prop({ default: 0 })
+  attempts: number;
 }
 
 export const SignupOtpSchema = SchemaFactory.createForClass(SignupOtp);

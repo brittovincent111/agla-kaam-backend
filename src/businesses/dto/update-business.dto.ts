@@ -55,6 +55,10 @@ export class UpdateBusinessDto {
   @MaxLength(500)
   googleReviewUrl?: string;
 
+  @IsOptional()
+  @IsBoolean()
+  amcAutoBook?: boolean;
+
   // Drives subscription pricing (see SubscriptionsService.createOrder) —
   // restricted to the countries pricing actually exists for, rather than any
   // 2-character string, since an unrecognized code would otherwise silently
@@ -102,6 +106,11 @@ export class UpdateBusinessDto {
   @IsOptional()
   @IsString()
   @MaxLength(2000)
+  reminderTemplate?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
   defaultQuotationTerms?: string;
 
   // Payment instructions printed on invoices — see Business schema.
@@ -138,6 +147,13 @@ export class UpdateBusinessDto {
   @IsOptional()
   @IsBoolean()
   showPaymentDetailsOnInvoice?: boolean;
+
+  // Sent by the Payment settings screen on every save. Missing from this
+  // whitelist, forbidNonWhitelisted rejected the whole request — so no
+  // payment detail (UPI, bank, QR, cash) could be saved from that screen.
+  @IsOptional()
+  @IsBoolean()
+  acceptsCash?: boolean;
 
   // Invoice Settings
   @IsOptional()
@@ -308,4 +324,3 @@ export class UpdateBusinessDto {
   @IsBoolean()
   enableTaxInclusivePrice?: boolean;
 }
-

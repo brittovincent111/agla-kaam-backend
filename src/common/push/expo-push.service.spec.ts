@@ -23,7 +23,11 @@ describe('collectInvalidTokens', () => {
     expect(
       collectInvalidTokens(messages, [
         { status: 'ok', id: '1' },
-        { status: 'error', message: 'gone', details: { error: 'DeviceNotRegistered' } },
+        {
+          status: 'error',
+          message: 'gone',
+          details: { error: 'DeviceNotRegistered' },
+        },
         { status: 'ok', id: '3' },
       ]),
     ).toEqual(['tok-b']);
@@ -34,7 +38,11 @@ describe('collectInvalidTokens', () => {
     // working device because Expo was briefly rate limiting us.
     expect(
       collectInvalidTokens(messages, [
-        { status: 'error', message: 'slow down', details: { error: 'MessageRateExceeded' } },
+        {
+          status: 'error',
+          message: 'slow down',
+          details: { error: 'MessageRateExceeded' },
+        },
         { status: 'error', message: 'oops', details: {} },
         { status: 'error', message: 'no details' },
       ]),
@@ -52,7 +60,7 @@ describe('collectInvalidTokens', () => {
         {
           status: 'error',
           message:
-            'Unable to retrieve the FCM server key for the recipient\'s app.',
+            "Unable to retrieve the FCM server key for the recipient's app.",
           details: { error: 'InvalidCredentials', fault: 'developer' },
         },
       ]),

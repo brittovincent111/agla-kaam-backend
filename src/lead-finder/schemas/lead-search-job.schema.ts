@@ -76,6 +76,11 @@ export class LeadSearchJob {
 
   @Prop({ default: 'admin' })
   createdBy: string;
+
+  // Hard cap on provider calls for this job (one call = one page of up to 20).
+  // The autopilot sets it so its searches stay inside the free monthly quota.
+  @Prop()
+  maxRequests?: number;
 }
 
 export const LeadSearchJobSchema = SchemaFactory.createForClass(LeadSearchJob);

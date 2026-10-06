@@ -284,7 +284,7 @@ const PRIVACY_POLICY_BODY = `
     <p class="wordmark"><span class="mark"></span> Agla Kaam · by VeloCrew</p>
     <h1 class="doc-title">Privacy Policy</h1>
     <div class="doc-meta">
-      <span>Effective <strong>1 September 2026</strong></span>
+      <span>Effective <strong>6 October 2026</strong></span>
       <span>Operated by <strong>VeloCrew</strong> (UDYAM&#8209;KL&#8209;13&#8209;0110771)</span>
     </div>
     <nav class="doc-nav-links">
@@ -329,7 +329,7 @@ const PRIVACY_POLICY_BODY = `
       <div class="sub">
         <div class="sub-item">
           <h3>Account &amp; business information</h3>
-          <p>Your name, business name, trade type, phone number, email address, and password &mdash; stored as an irreversible hash, never in plain text &mdash; or your Google account identifier if you sign in with Google. Also your GSTIN, business address, and any logo or signature image you upload.</p>
+          <p>Your name, business name, trade type, phone number, email address, and password &mdash; stored as an irreversible hash, never in plain text &mdash; or your Google or Apple account identifier if you sign in with Google or Apple. Also your GSTIN, business address, and any logo or signature image you upload.</p>
         </div>
         <div class="sub-item">
           <h3>Customer information you add</h3>
@@ -341,7 +341,7 @@ const PRIVACY_POLICY_BODY = `
         </div>
         <div class="sub-item">
           <h3>Payment information</h3>
-          <p>Subscription payments are handled directly by Razorpay. We store only Razorpay's order and payment reference IDs, the plan, amount, and status &mdash; never your card, UPI, or bank details.</p>
+          <p>Subscriptions bought in the app are paid through the App Store or Google Play; payments on our website are handled by Razorpay. We store only the transaction or order reference, the plan, amount, and status &mdash; never your card, UPI, or bank details.</p>
         </div>
         <div class="sub-item">
           <h3>Device permissions &mdash; only when the feature is used</h3>
@@ -354,8 +354,8 @@ const PRIVACY_POLICY_BODY = `
 
     <section id="use">
       <h2><span class="num">02</span> How we use it</h2>
-      <p>To run the core features of Agla Kaam &mdash; tracking your customers and their service history, sending you reminders, generating invoice and quotation PDFs, and managing your subscription. To send you a one-time password reset code by email, if you request one. To process payments through Razorpay for paid plans.</p>
-      <p>When you send a reminder over WhatsApp, we build the message text and open your own WhatsApp app with it pre-filled &mdash; you choose to send it. We never send WhatsApp messages ourselves, and we don't use Meta's WhatsApp Business API.</p>
+      <p>To run the core features of Agla Kaam &mdash; tracking your customers and their service history, sending you reminders, generating invoice and quotation PDFs, and managing your subscription. To send you a one-time password reset code by email, if you request one. To confirm and manage your paid plan with the App Store, Google Play, or Razorpay.</p>
+      <p>When you send a reminder over WhatsApp, we build the message text and open your own WhatsApp app with it pre-filled &mdash; you choose to send it. We never message your customers ourselves.</p>
     </section>
 
     <section id="controller">
@@ -372,6 +372,7 @@ const PRIVACY_POLICY_BODY = `
         <div class="provider"><div class="name">Amazon S3</div><div class="role">Logo &amp; signature images &middot; Mumbai (ap-south-1)</div></div>
         <div class="provider"><div class="name">Razorpay</div><div class="role">Subscription payment processing</div></div>
         <div class="provider"><div class="name">Google</div><div class="role">Sign-in authentication only &mdash; no Maps, no Analytics</div></div>
+        <div class="provider"><div class="name">Apple</div><div class="role">Sign in with Apple, and App Store subscription payments</div></div>
         <div class="provider"><div class="name">Our email provider</div><div class="role">Delivers password reset codes</div></div>
       </div>
     </section>
@@ -440,7 +441,7 @@ const TERMS_OF_SERVICE_BODY = `
     <p class="wordmark"><span class="mark"></span> Agla Kaam · by VeloCrew</p>
     <h1 class="doc-title">Terms of Service</h1>
     <div class="doc-meta">
-      <span>Effective <strong>1 September 2026</strong></span>
+      <span>Effective <strong>6 October 2026</strong></span>
       <span>Operated by <strong>VeloCrew</strong> (UDYAM&#8209;KL&#8209;13&#8209;0110771)</span>
     </div>
     <nav class="doc-nav-links">
@@ -475,7 +476,7 @@ const TERMS_OF_SERVICE_BODY = `
       <p class="summary-label">In plain terms</p>
       <ul>
         <li><strong>Agla Kaam helps you run a service business</strong> &mdash; customers, reminders, invoices, and quotations.</li>
-        <li><strong>Plans don't auto-renew.</strong> You choose when to pay, in INR, through Razorpay.</li>
+        <li><strong>Paid plans are yearly.</strong> Plans bought in the app renew automatically until you cancel them in your App Store or Google Play settings.</li>
         <li><strong>Your business and customer data stays yours</strong> &mdash; we're just storing and processing it for you.</li>
         <li><strong>You can leave anytime</strong> &mdash; deleting your account deletes your data immediately.</li>
       </ul>
@@ -493,12 +494,15 @@ const TERMS_OF_SERVICE_BODY = `
 
     <section id="account">
       <h2><span class="num">03</span> Your account</h2>
-      <p>You can create an account with an email and password, or by signing in with Google. You're responsible for keeping your login details secure and for everything that happens under your account. If you add technicians to your team, you're responsible for their access and conduct within the app.</p>
+      <p>You can create an account with an email and password, or by signing in with Google or Apple. You're responsible for keeping your login details secure and for everything that happens under your account. If you add technicians to your team, you're responsible for their access and conduct within the app.</p>
     </section>
 
     <section id="billing">
       <h2><span class="num">04</span> Plans &amp; billing</h2>
-      <p>Agla Kaam offers a free plan with usage limits, and paid plans &mdash; Invoicing, Combo, and an optional Team add-on &mdash; billed in INR. Paid plans are processed securely through Razorpay and are valid for the period shown at checkout. We'll show you the current price before you pay, and plans don't renew automatically &mdash; you renew when you're ready to keep paid features active. Prices and plan limits may change; changes won't apply to a period you've already paid for.</p>
+      <p>Agla Kaam offers a free plan with usage limits, and yearly paid plans &mdash; Reminders, Invoicing, Combo, and Combo + Team. The price is shown before you pay.</p>
+      <p><strong>Plans bought in the app</strong> are auto-renewing subscriptions charged to your Apple ID or Google Play account. They renew each year unless you turn off auto-renew at least 24 hours before the end of the current period. You can manage or cancel them in your App Store or Google Play account settings; refunds are handled by Apple or Google under their policies. Deleting your Agla Kaam account does not cancel a store subscription &mdash; cancel it in the store too.</p>
+      <p><strong>Plans bought on our website</strong> are paid once through Razorpay, are valid for the period shown at checkout, and do not renew automatically.</p>
+      <p>Prices and plan limits may change; changes won't apply to a period you've already paid for.</p>
     </section>
 
     <section id="use">
@@ -728,8 +732,4 @@ export const DELETE_ACCOUNT_HTML = page(
   'Delete Your Account or Data',
   DELETE_ACCOUNT_BODY,
 );
-export const SUPPORT_HTML = page(
-  'Customer Support & Help Desk',
-  SUPPORT_BODY,
-);
-
+export const SUPPORT_HTML = page('Customer Support & Help Desk', SUPPORT_BODY);

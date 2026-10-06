@@ -58,10 +58,18 @@ export class Purchase {
   @Prop({ required: true, default: 'INR', uppercase: true, trim: true })
   currency: string;
 
-  @Prop({ required: true, default: 'paid', enum: ['paid', 'unpaid', 'partially_paid'] })
+  @Prop({
+    required: true,
+    default: 'paid',
+    enum: ['paid', 'unpaid', 'partially_paid'],
+  })
   paymentStatus: string;
 
-  @Prop({ required: true, default: 'cash', enum: ['cash', 'bank_transfer', 'upi', 'cheque', 'credit', 'other'] })
+  @Prop({
+    required: true,
+    default: 'cash',
+    enum: ['cash', 'bank_transfer', 'upi', 'cheque', 'credit', 'other'],
+  })
   paymentMethod: string;
 
   @Prop({ type: [PurchaseItemSchema], required: true })
@@ -90,3 +98,7 @@ export class Purchase {
 export const PurchaseSchema = SchemaFactory.createForClass(Purchase);
 PurchaseSchema.index({ businessId: 1, purchaseDate: -1 });
 
+// Unique per business: without it two concurrent creates could allocate the
+// same purchase number, leaving two purchase orders that look identical.
+// (businessId + purchaseDate was already indexed for listing.)
+PurchaseSchema.index({ businessId: 1, purchaseNumber: 1 }, { unique: true });

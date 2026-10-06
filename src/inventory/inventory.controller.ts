@@ -14,6 +14,8 @@ import { InventoryService } from './inventory.service';
 import { CreateInventoryItemDto } from './dto/create-inventory-item.dto';
 import { UpdateInventoryItemDto } from './dto/update-inventory-item.dto';
 import { ListInventoryDto } from './dto/list-inventory.dto';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import {
   AuthenticatedBusiness,
@@ -21,10 +23,14 @@ import {
 } from '../common/decorators/current-business.decorator';
 
 @Controller('inventory')
-@UseGuards(JwtAuthGuard)
+// Reads stay open to technicians (looking up a part is ordinary field work);
+// every mutation is owner-only, because these routes set sale and cost prices
+// and can delete catalogue records.
+@UseGuards(JwtAuthGuard, RolesGuard)
 export class InventoryController {
   constructor(private readonly inventoryService: InventoryService) {}
 
+  @Roles('owner')
   @Post()
   create(
     @CurrentBusiness() business: AuthenticatedBusiness,
@@ -48,7 +54,10 @@ export class InventoryController {
     @CurrentBusiness() business: AuthenticatedBusiness,
     @Query() query: ListInventoryDto,
   ) {
-    return this.inventoryService.findPageForBusiness(business.businessId, query);
+    return this.inventoryService.findPageForBusiness(
+      business.businessId,
+      query,
+    );
   }
 
   @Get()
@@ -64,6 +73,7 @@ export class InventoryController {
     return this.inventoryService.findOne(business.businessId, id);
   }
 
+  @Roles('owner')
   @Patch(':id')
   update(
     @CurrentBusiness() business: AuthenticatedBusiness,
@@ -73,6 +83,7 @@ export class InventoryController {
     return this.inventoryService.update(business.businessId, id, dto);
   }
 
+  @Roles('owner')
   @Delete(':id')
   remove(
     @CurrentBusiness() business: AuthenticatedBusiness,

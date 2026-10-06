@@ -1,4 +1,16 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { dateRangeFilter } from '../common/pagination/date-range';
+import {
+  SortSpec,
+  amountRangeFilter,
+  cursorValue,
+  splitList,
+} from '../common/pagination/list-options';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Quotation, QuotationDocument } from './schemas/quotation.schema';
@@ -14,7 +26,10 @@ import {
   applyLineTax,
   calculateInvoiceTotals,
 } from '../common/constants/invoice-options';
-import { FREE_TIER_QUOTATION_LIMIT, tierHasInvoicing } from '../common/constants/subscription-options';
+import {
+  FREE_TIER_QUOTATION_LIMIT,
+  tierHasInvoicing,
+} from '../common/constants/subscription-options';
 import {
   Page,
   andFilters,
@@ -41,7 +56,8 @@ function addDays(date: Date, days: number): Date {
 @Injectable()
 export class QuotationsService {
   constructor(
-    @InjectModel(Quotation.name) private readonly quotationModel: Model<QuotationDocument>,
+    @InjectModel(Quotation.name)
+    private readonly quotationModel: Model<QuotationDocument>,
     private readonly customersService: CustomersService,
     private readonly servicesService: ServicesService,
     private readonly subscriptionsService: SubscriptionsService,
@@ -62,19 +78,29 @@ export class QuotationsService {
     return `${prefix}${new Date().getFullYear()}-${String(serial).padStart(3, '0')}`;
   }
 
-  private async buildItems(businessId: string, customerId: string, dtoItems: CreateQuotationDto['items']) {
+  private async buildItems(
+    businessId: string,
+    customerId: string,
+    dtoItems: CreateQuotationDto['items'],
+  ) {
     return Promise.all(
       dtoItems.map(async (item) => {
         if (item.serviceId) {
           // Confirms the referenced service actually belongs to this
           // business/customer before it can be quoted.
-          const service = await this.servicesService.findOne(businessId, item.serviceId);
+          const service = await this.servicesService.findOne(
+            businessId,
+            item.serviceId,
+          );
           if (service.customerId.toString() !== customerId) {
-            throw new BadRequestException('Service does not belong to the selected customer');
+            throw new BadRequestException(
+              'Service does not belong to the selected customer',
+            );
           }
         }
         const taxRate = item.taxRate ?? 0;
-        const amount = Math.round((item.quantity * item.rate + Number.EPSILON) * 100) / 100;
+        const amount =
+          Math.round((item.quantity * item.rate + Number.EPSILON) * 100) / 100;
         // Placeholder only. The real per-line tax depends on this line's share
         // of the invoice-level discount, which is not known until every line
         // is priced — applyLineTax() below overwrites it from
@@ -95,7 +121,10 @@ export class QuotationsService {
     );
   }
 
-  async create(businessId: string, dto: CreateQuotationDto): Promise<QuotationDocument> {
+  async create(
+    businessId: string,
+    dto: CreateQuotationDto,
+  ): Promise<QuotationDocument> {
     const tier = await this.subscriptionsService.getActiveTier(businessId);
     if (!tierHasInvoicing(tier)) {
       const count = await this.quotationModel
@@ -118,8 +147,12 @@ export class QuotationsService {
     const items = await this.buildItems(businessId, dto.customerId, dto.items);
     const totals = calculateInvoiceTotals(items, dto.discount ?? 0);
     applyLineTax(items, totals);
-    const quotationDate = dto.quotationDate ? new Date(dto.quotationDate) : new Date();
-    const validUntil = dto.validUntil ? new Date(dto.validUntil) : addDays(quotationDate, DEFAULT_VALIDITY_DAYS);
+    const quotationDate = dto.quotationDate
+      ? new Date(dto.quotationDate)
+      : new Date();
+    const validUntil = dto.validUntil
+      ? new Date(dto.validUntil)
+      : addDays(quotationDate, DEFAULT_VALIDITY_DAYS);
     const quotationNumber = await this.nextQuotationNumber(businessId);
 
     return this.quotationModel.create({
@@ -141,7 +174,10 @@ export class QuotationsService {
     });
   }
 
-  async findOne(businessId: string, quotationId: string): Promise<QuotationDocument> {
+  async findOne(
+    businessId: string,
+    quotationId: string,
+  ): Promise<QuotationDocument> {
     if (!Types.ObjectId.isValid(quotationId)) {
       throw new NotFoundException('Quotation not found');
     }
@@ -152,7 +188,10 @@ export class QuotationsService {
     return quotation;
   }
 
-  async findOnePopulated(businessId: string, quotationId: string): Promise<QuotationDocument> {
+  async findOnePopulated(
+    businessId: string,
+    quotationId: string,
+  ): Promise<QuotationDocument> {
     const quotation = await this.findOne(businessId, quotationId);
     await quotation.populate('customerId');
     return quotation;
@@ -172,10 +211,15 @@ export class QuotationsService {
       status?: string;
       search?: string;
       customerId?: string;
+      from?: string;
+      to?: string;
+      minAmount?: number;
+      maxAmount?: number;
+      sort?: string;
       limit?: number;
       cursor?: string;
     },
-  ): Promise<Page<QuotationDocument>> {
+  ): Promise<Page<QuotationDocument> & { summary?: { quoted: number } }> {
     const limit = clampLimit(options.limit);
     const cursor = decodePageCursor(options.cursor);
 
@@ -187,28 +231,84 @@ export class QuotationsService {
         )
       : [];
 
+    const pickedCustomers = splitList(options.customerId);
+    const narrowing = [
+      pickedCustomers.length ? { customerId: idsFilter(pickedCustomers) } : {},
+      this.statusFilter(options.status),
+      numberOrCustomerFilter(
+        options.search,
+        'quotationNumber',
+        customerIds,
+        idsFilter,
+      ),
+      dateRangeFilter('quotationDate', options.from, options.to),
+      amountRangeFilter('total', options.minAmount, options.maxAmount),
+    ];
+    const sort =
+      QUOTATION_SORTS[options.sort ?? 'newest'] ?? QUOTATION_SORTS.newest;
     const filter = andFilters(
       { businessId },
-      options.customerId ? { customerId: idFilter(options.customerId) } : {},
-      options.status && options.status !== 'all' ? { status: options.status } : {},
-      numberOrCustomerFilter(options.search, 'quotationNumber', customerIds, idsFilter),
-      pageCursorFilter(cursor, 'quotationDate', 'desc'),
+      ...narrowing,
+      pageCursorFilter(cursor, sort.field, sort.direction),
     );
 
     const [rows, total] = await Promise.all([
       this.quotationModel
         .find(filter)
-        .sort(pageSort('quotationDate', 'desc'))
+        .sort(pageSort(sort.field, sort.direction))
         .limit(limit + 1)
         .populate('customerId', 'name phone')
         .exec(),
-      cursor ? Promise.resolve(undefined) : this.quotationModel.countDocuments(filter).exec(),
+      cursor
+        ? Promise.resolve(undefined)
+        : this.quotationModel.countDocuments(filter).exec(),
     ]);
 
-    return buildPage(rows, limit, (row) => ({
-      v: row.quotationDate.toISOString(),
-      id: (row._id as { toString(): string }).toString(),
-    }), total);
+    const page = buildPage(
+      rows,
+      limit,
+      (row) => ({
+        v: cursorValue(row as unknown as Record<string, unknown>, sort),
+        id: (row._id as { toString(): string }).toString(),
+      }),
+      total,
+    );
+    if (cursor) return page;
+    // What the quotes on screen add up to, once per list. Rejected quotes
+    // are work that will not happen, so they are not counted. Aggregation
+    // does not cast ids, so the business is matched in both stored forms.
+    const [sum] = await this.quotationModel
+      .aggregate<{ quoted: number }>([
+        {
+          $match: andFilters(
+            { businessId: idFilter(businessId) },
+            ...narrowing,
+          ),
+        },
+        { $match: { status: { $ne: 'rejected' } } },
+        { $group: { _id: null, quoted: { $sum: '$total' } } },
+      ])
+      .exec();
+    return { ...page, summary: { quoted: sum?.quoted ?? 0 } };
+  }
+
+  // 'expired' is never stored: it is a quote that went out, got no answer,
+  // and is past its valid-until date — the ones worth a follow-up call. The
+  // Sent chip leaves them out so the two never show the same quote.
+  private statusFilter(status?: string): Record<string, unknown> {
+    if (!status || status === 'all') return {};
+    if (status === 'expired')
+      return { status: 'sent', validUntil: { $lt: new Date() } };
+    if (status === 'sent') {
+      return {
+        status: 'sent',
+        $or: [
+          { validUntil: { $gte: new Date() } },
+          { validUntil: { $exists: false } },
+        ],
+      };
+    }
+    return { status };
   }
 
   async findAllForBusiness(
@@ -235,7 +335,10 @@ export class QuotationsService {
 
     const q = filters.search.trim().toLowerCase();
     return quotations.filter((quotation) => {
-      const customer = quotation.customerId as unknown as { name?: string; phone?: string };
+      const customer = quotation.customerId as unknown as {
+        name?: string;
+        phone?: string;
+      };
       return (
         quotation.quotationNumber.toLowerCase().includes(q) ||
         customer?.name?.toLowerCase().includes(q) ||
@@ -244,26 +347,45 @@ export class QuotationsService {
     });
   }
 
-  async update(businessId: string, quotationId: string, dto: UpdateQuotationDto): Promise<QuotationDocument> {
+  async update(
+    businessId: string,
+    quotationId: string,
+    dto: UpdateQuotationDto,
+  ): Promise<QuotationDocument> {
     const quotation = await this.findOne(businessId, quotationId);
     if (quotation.status !== 'draft' && quotation.status !== 'sent') {
-      throw new BadRequestException('Only draft or sent quotations can be edited');
+      throw new BadRequestException(
+        'Only draft or sent quotations can be edited',
+      );
     }
 
     const customerId = quotation.customerId.toString();
     if (dto.items) {
-      quotation.items = (await this.buildItems(businessId, customerId, dto.items)) as any;
+      quotation.items = (await this.buildItems(
+        businessId,
+        customerId,
+        dto.items,
+      )) as any;
     }
-    if (dto.quotationDate) quotation.quotationDate = new Date(dto.quotationDate);
+    if (dto.quotationDate)
+      quotation.quotationDate = new Date(dto.quotationDate);
     if (dto.validUntil) quotation.validUntil = new Date(dto.validUntil);
     if (dto.notes !== undefined) quotation.notes = dto.notes;
-    if (dto.termsAndConditions !== undefined) quotation.termsAndConditions = dto.termsAndConditions;
+    if (dto.termsAndConditions !== undefined)
+      quotation.termsAndConditions = dto.termsAndConditions;
     if (dto.status) quotation.status = dto.status;
 
     const totals = calculateInvoiceTotals(
-      quotation.items.map((item) => ({ quantity: item.quantity, rate: item.rate, taxRate: item.taxRate })),
+      quotation.items.map((item) => ({
+        quantity: item.quantity,
+        rate: item.rate,
+        taxRate: item.taxRate,
+      })),
       dto.discount ?? quotation.discount,
     );
+    // As on create — without it every edit left the rebuilt lines' tax at the
+    // buildItems placeholder of 0, so the PDF's tax column read zero.
+    applyLineTax(quotation.items, totals);
     quotation.subtotal = totals.subtotal;
     quotation.discount = totals.discount;
     quotation.taxTotal = totals.taxTotal;
@@ -272,22 +394,32 @@ export class QuotationsService {
     return quotation.save();
   }
 
-  async send(businessId: string, quotationId: string): Promise<QuotationDocument> {
+  async send(
+    businessId: string,
+    quotationId: string,
+  ): Promise<QuotationDocument> {
     const quotation = await this.findOne(businessId, quotationId);
     if (quotation.status !== 'draft') {
       throw new BadRequestException('Only draft quotations can be sent');
     }
     if (quotation.items.length === 0) {
-      throw new BadRequestException('Add at least one item before sending a quotation');
+      throw new BadRequestException(
+        'Add at least one item before sending a quotation',
+      );
     }
     quotation.status = 'sent';
     return quotation.save();
   }
 
-  async cancel(businessId: string, quotationId: string): Promise<QuotationDocument> {
+  async cancel(
+    businessId: string,
+    quotationId: string,
+  ): Promise<QuotationDocument> {
     const quotation = await this.findOne(businessId, quotationId);
     if (quotation.status !== 'draft' && quotation.status !== 'sent') {
-      throw new BadRequestException(`Cannot cancel a ${quotation.status} quotation`);
+      throw new BadRequestException(
+        `Cannot cancel a ${quotation.status} quotation`,
+      );
     }
     quotation.status = 'rejected';
     return quotation.save();
@@ -307,10 +439,14 @@ export class QuotationsService {
   ): Promise<{ quotation: QuotationDocument; invoice: InvoiceDocument }> {
     const quotation = await this.findOne(businessId, quotationId);
     if (quotation.status === 'converted') {
-      throw new BadRequestException('This quotation has already been converted to an invoice');
+      throw new BadRequestException(
+        'This quotation has already been converted to an invoice',
+      );
     }
     if (quotation.status === 'rejected') {
-      throw new BadRequestException('A rejected quotation cannot be converted to an invoice');
+      throw new BadRequestException(
+        'A rejected quotation cannot be converted to an invoice',
+      );
     }
 
     // Goes through InvoicingService.create() so the conversion is subject to
@@ -335,7 +471,10 @@ export class QuotationsService {
     // *current* currency/taxType — but this quotation may have been quoted
     // under different settings (they're editable any time). The invoice
     // must honor what was actually quoted, not silently switch.
-    if (invoice.currency !== quotation.currency || invoice.taxType !== quotation.taxType) {
+    if (
+      invoice.currency !== quotation.currency ||
+      invoice.taxType !== quotation.taxType
+    ) {
       invoice.currency = quotation.currency;
       invoice.taxType = quotation.taxType;
       await invoice.save();
@@ -349,3 +488,9 @@ export class QuotationsService {
     return { quotation, invoice };
   }
 }
+
+const QUOTATION_SORTS: Record<string, SortSpec> = {
+  newest: { field: 'quotationDate', direction: 'desc', keyType: 'date' },
+  oldest: { field: 'quotationDate', direction: 'asc', keyType: 'date' },
+  amount: { field: 'total', direction: 'desc', keyType: 'number' },
+};

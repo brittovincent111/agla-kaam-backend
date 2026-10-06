@@ -12,7 +12,9 @@ import { InvoicingModule } from '../invoicing/invoicing.module';
 
 @Module({
   imports: [
-    MongooseModule.forFeature([{ name: Quotation.name, schema: QuotationSchema }]),
+    MongooseModule.forFeature([
+      { name: Quotation.name, schema: QuotationSchema },
+    ]),
     CustomersModule,
     ServicesModule,
     BusinessesModule,

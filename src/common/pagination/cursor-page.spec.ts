@@ -18,7 +18,9 @@ describe('page cursor', () => {
 
   it('returns null for junk rather than throwing', () => {
     expect(decodePageCursor('not-base64!!')).toBeNull();
-    expect(decodePageCursor(Buffer.from('{}').toString('base64url'))).toBeNull();
+    expect(
+      decodePageCursor(Buffer.from('{}').toString('base64url')),
+    ).toBeNull();
     expect(decodePageCursor(undefined)).toBeNull();
   });
 
@@ -34,7 +36,9 @@ describe('page cursor', () => {
       'invoiceDate',
       'desc',
     ) as { $or: Record<string, any>[] };
-    expect(filter.$or[0].invoiceDate.$lt).toEqual(new Date('2026-09-09T10:00:00.000Z'));
+    expect(filter.$or[0].invoiceDate.$lt).toEqual(
+      new Date('2026-09-09T10:00:00.000Z'),
+    );
     expect(filter.$or[1]._id.$lt).toBe('x');
   });
 
@@ -50,7 +54,12 @@ describe('page cursor', () => {
   // that to a Date would compare a Date against a string field and match
   // nothing, ending the list early — and plenty of part names parse as dates.
   it('keeps a text sort key as text instead of parsing it as a date', () => {
-    const filter = pageCursorFilter({ v: '500', id: 'x' }, 'name', 'asc', 'text') as {
+    const filter = pageCursorFilter(
+      { v: '500', id: 'x' },
+      'name',
+      'asc',
+      'text',
+    ) as {
       $or: Record<string, any>[];
     };
     expect(filter.$or[0].name.$gt).toBe('500');
@@ -61,7 +70,11 @@ describe('page cursor', () => {
   // The same value on the default 'date' key type is what the text mode
   // exists to avoid — proof the two branches really differ.
   it('still parses a date sort key, which is why text mode is needed', () => {
-    const filter = pageCursorFilter({ v: '500', id: 'x' }, 'createdAt', 'asc') as {
+    const filter = pageCursorFilter(
+      { v: '500', id: 'x' },
+      'createdAt',
+      'asc',
+    ) as {
       $or: Record<string, any>[];
     };
     expect(filter.$or[0].createdAt.$gt).toBeInstanceOf(Date);
@@ -70,7 +83,10 @@ describe('page cursor', () => {
   // Two rows sharing a timestamp must not straddle a page boundary — without
   // the _id tie break one of them is never returned.
   it('breaks ties on _id in both the filter and the sort', () => {
-    const filter = pageCursorFilter({ v: '2026-01-01T00:00:00.000Z', id: 'm' }, 'd') as {
+    const filter = pageCursorFilter(
+      { v: '2026-01-01T00:00:00.000Z', id: 'm' },
+      'd',
+    ) as {
       $or: Record<string, any>[];
     };
     expect(filter.$or[1]).toHaveProperty('_id');
@@ -97,7 +113,10 @@ describe('textSearchFilter', () => {
   });
 
   it('matches every named field case-insensitively', () => {
-    const filter = textSearchFilter('ravi', ['invoiceNumber', 'customerName']) as {
+    const filter = textSearchFilter('ravi', [
+      'invoiceNumber',
+      'customerName',
+    ]) as {
       $or: Record<string, any>[];
     };
     expect(filter.$or).toHaveLength(2);
@@ -108,7 +127,9 @@ describe('textSearchFilter', () => {
   it('neutralises regex metacharacters so a typed "." is a literal dot', () => {
     expect(escapeRegex('a.b+c')).toBe('a\\.b\\+c');
     // "-" needs no escaping outside a character class, so it stays literal.
-    const filter = textSearchFilter('INV-1.2', ['n']) as { $or: Record<string, any>[] };
+    const filter = textSearchFilter('INV-1.2', ['n']) as {
+      $or: Record<string, any>[];
+    };
     expect(filter.$or[0].n.$regex).toBe('INV-1\\.2');
   });
 });
@@ -136,13 +157,19 @@ describe('andFilters', () => {
 describe('buildPage', () => {
   const key = (row: { _id: string; d: string }) => ({ v: row.d, id: row._id });
   const rows = (n: number) =>
-    Array.from({ length: n }, (_, i) => ({ _id: `id${i}`, d: `2026-01-0${i + 1}` }));
+    Array.from({ length: n }, (_, i) => ({
+      _id: `id${i}`,
+      d: `2026-01-0${i + 1}`,
+    }));
 
   it('trims the probe row and offers a cursor when more remain', () => {
     const page = buildPage(rows(4), 3, key);
     expect(page.items).toHaveLength(3);
     expect(page.nextCursor).not.toBeNull();
-    expect(decodePageCursor(page.nextCursor!)).toEqual({ v: '2026-01-03', id: 'id2' });
+    expect(decodePageCursor(page.nextCursor!)).toEqual({
+      v: '2026-01-03',
+      id: 'id2',
+    });
   });
 
   it('ends the list when the probe row did not come back', () => {

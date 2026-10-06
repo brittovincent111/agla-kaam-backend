@@ -13,7 +13,10 @@ export interface AuthenticatedBusiness {
 }
 
 export const CurrentBusiness = createParamDecorator(
-  (data: keyof AuthenticatedBusiness | undefined, ctx: ExecutionContext): any => {
+  (
+    data: keyof AuthenticatedBusiness | undefined,
+    ctx: ExecutionContext,
+  ): any => {
     const request = ctx.switchToHttp().getRequest();
     const business = request.business;
     return data && business ? business[data] : business;

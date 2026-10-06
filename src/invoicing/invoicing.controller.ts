@@ -1,10 +1,24 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
-import { CurrentBusiness, AuthenticatedBusiness } from '../common/decorators/current-business.decorator';
+import {
+  CurrentBusiness,
+  AuthenticatedBusiness,
+} from '../common/decorators/current-business.decorator';
 import { InvoicingService } from './invoicing.service';
 import { InvoicePdfService } from './invoice-pdf.service';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
@@ -32,7 +46,10 @@ export class InvoicingController {
   ) {}
 
   @Post()
-  create(@CurrentBusiness() business: AuthenticatedBusiness, @Body() dto: CreateInvoiceDto) {
+  create(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Body() dto: CreateInvoiceDto,
+  ) {
     return this.invoicingService.create(business.businessId, dto);
   }
 
@@ -50,7 +67,44 @@ export class InvoicingController {
     @CurrentBusiness() business: AuthenticatedBusiness,
     @Query() query: ListInvoicesDto,
   ) {
-    return this.invoicingService.findPageForBusiness(business.businessId, query);
+    return this.invoicingService.findPageForBusiness(
+      business.businessId,
+      query,
+    );
+  }
+
+  // The invoice billing one job, or null — the completed job's checklist.
+  @Get('for-service/:serviceId')
+  async forService(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('serviceId') serviceId: string,
+  ) {
+    const invoice = await this.invoicingService.findLatestForService(
+      business.businessId,
+      serviceId,
+    );
+    if (!invoice) return { invoice: null };
+    return {
+      invoice: {
+        _id: String(invoice._id),
+        invoiceNumber: invoice.invoiceNumber,
+        total: invoice.total,
+        balanceDue: invoice.balanceDue,
+        status: invoice.status,
+      },
+    };
+  }
+
+  // Declared before ':id' so "customer-summary" is not read as an id.
+  @Get('customer-summary/:customerId')
+  customerSummary(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('customerId') customerId: string,
+  ) {
+    return this.invoicingService.customerSummary(
+      business.businessId,
+      customerId,
+    );
   }
 
   @Get()
@@ -60,7 +114,11 @@ export class InvoicingController {
     @Query('search') search?: string,
     @Query('customerId') customerId?: string,
   ) {
-    return this.invoicingService.findAllForBusiness(business.businessId, { status, search, customerId });
+    return this.invoicingService.findAllForBusiness(business.businessId, {
+      status,
+      search,
+      customerId,
+    });
   }
 
   @Get('outstanding-summary')
@@ -69,8 +127,14 @@ export class InvoicingController {
   }
 
   @Get(':id')
-  findOne(@CurrentBusiness() business: AuthenticatedBusiness, @Param('id') id: string) {
-    return this.invoicingService.findOneWithDisplayStatus(business.businessId, id);
+  findOne(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+  ) {
+    return this.invoicingService.findOneWithDisplayStatus(
+      business.businessId,
+      id,
+    );
   }
 
   @Patch(':id')
@@ -83,17 +147,26 @@ export class InvoicingController {
   }
 
   @Patch(':id/send')
-  send(@CurrentBusiness() business: AuthenticatedBusiness, @Param('id') id: string) {
+  send(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+  ) {
     return this.invoicingService.send(business.businessId, id);
   }
 
   @Patch(':id/cancel')
-  cancel(@CurrentBusiness() business: AuthenticatedBusiness, @Param('id') id: string) {
+  cancel(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+  ) {
     return this.invoicingService.cancel(business.businessId, id);
   }
 
   @Delete(':id')
-  remove(@CurrentBusiness() business: AuthenticatedBusiness, @Param('id') id: string) {
+  remove(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+  ) {
     return this.invoicingService.remove(business.businessId, id);
   }
 
@@ -107,8 +180,14 @@ export class InvoicingController {
   }
 
   @Get(':id/payments')
-  listPayments(@CurrentBusiness() business: AuthenticatedBusiness, @Param('id') id: string) {
-    return this.invoicingService.findPaymentsForInvoice(business.businessId, id);
+  listPayments(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+  ) {
+    return this.invoicingService.findPaymentsForInvoice(
+      business.businessId,
+      id,
+    );
   }
 
   @Get(':id/pdf')
@@ -126,7 +205,7 @@ export class InvoicingController {
       ? biz.invoiceTemplateId
       : DEFAULT_DOCUMENT_TEMPLATE_ID;
     const accentColor = isCustomAccentUnlocked(tier)
-      ? biz.documentAccentColor ?? null
+      ? (biz.documentAccentColor ?? null)
       : null;
     const buffer = await this.invoicePdfService.generate(
       business.businessId,

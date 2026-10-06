@@ -24,7 +24,8 @@ export class LeadProviderUsage {
   estimatedCostUsd: number;
 }
 
-export const LeadProviderUsageSchema = SchemaFactory.createForClass(LeadProviderUsage);
+export const LeadProviderUsageSchema =
+  SchemaFactory.createForClass(LeadProviderUsage);
 
 LeadProviderUsageSchema.index({ provider: 1, dateKey: 1 }, { unique: true });
 LeadProviderUsageSchema.index({ provider: 1, monthKey: 1 });

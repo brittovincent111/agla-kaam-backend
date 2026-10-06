@@ -1,3 +1,4 @@
+import { isPhoneNumber } from 'class-validator';
 import {
   ConflictException,
   ForbiddenException,
@@ -90,6 +91,98 @@ export class CustomersService {
       gstin: dto.gstin,
       source: dto.source ?? 'manual',
     });
+  }
+
+  /**
+   * Adds many customers at once — from the phonebook or pasted from a
+   * spreadsheet. Adding 200 existing customers one at a time is where a new
+   * business gives up.
+   *
+   * Same rules as create(): a phone already on file (by digits, so
+   * "098765 43210" matches "+919876543210") is skipped, as is a repeat within
+   * the batch; rows with a missing name or an invalid number are reported,
+   * not fatal; and the free plan's customer limit is honoured — the rows that
+   * fit are added and the rest reported, rather than refusing the lot.
+   */
+  async bulkCreate(
+    businessId: string,
+    rows: { name: string; phone: string; address?: string }[],
+    source: 'contacts' | 'manual' = 'manual',
+  ) {
+    const key = (raw: string) => {
+      const pattern = phoneMatchPatterns(raw)[0];
+      return pattern ? pattern.replace(/\$$/, '') : '';
+    };
+    const existing = await this.customerModel
+      .find({ businessId })
+      .select('phone')
+      .lean()
+      .exec();
+    const taken = new Set<string>();
+    for (const c of existing) {
+      const digits = String(c.phone ?? '').replace(/\D/g, '');
+      if (!digits) continue;
+      taken.add(digits);
+      taken.add(digits.slice(-10));
+    }
+
+    const invalid: { name: string; phone: string; reason: string }[] = [];
+    const duplicates: { name: string; phone: string }[] = [];
+    const accepted: { name: string; phone: string; address?: string }[] = [];
+    for (const row of rows) {
+      const name = row.name?.trim();
+      const phone = row.phone?.trim().replace(/[^\d+]/g, '');
+      if (!name) {
+        invalid.push({
+          name: row.name ?? '',
+          phone: row.phone ?? '',
+          reason: 'No name',
+        });
+        continue;
+      }
+      if (!phone || !(isPhoneNumber(phone) || isPhoneNumber(phone, 'IN'))) {
+        invalid.push({
+          name,
+          phone: row.phone ?? '',
+          reason: 'Not a valid phone number',
+        });
+        continue;
+      }
+      const k = key(phone);
+      if (!k || taken.has(k)) {
+        duplicates.push({ name, phone });
+        continue;
+      }
+      taken.add(k);
+      accepted.push({
+        name: name.slice(0, 100),
+        phone,
+        address: row.address?.trim().slice(0, 200) || undefined,
+      });
+    }
+
+    let room = accepted.length;
+    let limit: number | null = null;
+    const tier = await this.subscriptionsService.getActiveTier(businessId);
+    if (!tierHasUnlimitedCustomers(tier)) {
+      limit = Number(this.configService.get('FREE_TIER_CUSTOMER_LIMIT') ?? 25);
+      room = Math.max(0, Math.min(accepted.length, limit - existing.length));
+    }
+    const toCreate = accepted.slice(0, room);
+    if (toCreate.length) {
+      await this.customerModel.insertMany(
+        toCreate.map((c) => ({ businessId, ...c, source })),
+        { ordered: false },
+      );
+    }
+    return {
+      created: toCreate.length,
+      duplicates,
+      invalid,
+      // Rows that were fine but did not fit the free plan's limit.
+      overLimit: accepted.length - toCreate.length,
+      limit,
+    };
   }
 
   findAllForBusiness(businessId: string): Promise<CustomerDocument[]> {
@@ -334,7 +427,11 @@ export class CustomersService {
   ): Promise<CustomerDocument> {
     // Enforces the same access rule as viewing: a technician may pin only the
     // customers they are allowed to see.
-    const customer = await this.findOneForViewer(businessId, customerId, viewer);
+    const customer = await this.findOneForViewer(
+      businessId,
+      customerId,
+      viewer,
+    );
     customer.defaultLocation = {
       latitude: location.latitude,
       longitude: location.longitude,
@@ -349,7 +446,11 @@ export class CustomersService {
     customerId: string,
     viewer: AuthenticatedBusiness,
   ): Promise<CustomerDocument> {
-    const customer = await this.findOneForViewer(businessId, customerId, viewer);
+    const customer = await this.findOneForViewer(
+      businessId,
+      customerId,
+      viewer,
+    );
     customer.set('defaultLocation', undefined);
     return customer.save();
   }

@@ -15,6 +15,7 @@ import {
   drawStatusPill,
   drawTable,
   drawTextPanel,
+  drawTopMessage,
   drawTotals,
   formatAmount,
   measureText,
@@ -26,6 +27,7 @@ import {
 } from './document-render';
 import { DocumentLayoutId } from './document-templates';
 import { amountInWords } from './amount-in-words';
+import { premiumLayout } from './layout-premium';
 
 // The five document archetypes.
 //
@@ -51,9 +53,57 @@ export interface LayoutDefinition {
 
 function contactLines(ctx: Ctx): string[] {
   const { business } = ctx;
-  return [business.address, business.phone, business.email, business.website].filter(
-    Boolean,
-  ) as string[];
+  return [
+    business.address,
+    business.phone,
+    business.email,
+    business.website,
+  ].filter(Boolean) as string[];
+}
+
+// Bill From beside Bill To — the one pairing every layout uses, so no
+// template labels the parties its own way ("Service address", "Customer").
+// Returns the y beneath the taller of the two.
+function drawFromTo(
+  ctx: Ctx,
+  x: number,
+  y: number,
+  width: number,
+  opts: { nameSize?: number; gap?: number } = {},
+): number {
+  const { business, customer, spec } = ctx;
+  const gap = opts.gap ?? 28;
+  const colW = (width - gap) / 2;
+  let left = drawSectionLabel(ctx, spec.senderLabel ?? 'BILL FROM', x, y, colW);
+  left = drawPartyBlock(
+    ctx,
+    {
+      name: business.name,
+      phone: business.phone,
+      address: business.address,
+      taxId: businessTaxId(business),
+    },
+    x,
+    left,
+    colW,
+    { nameSize: opts.nameSize },
+  );
+  const rightX = x + colW + gap;
+  let right = drawSectionLabel(ctx, spec.recipientLabel, rightX, y, colW);
+  right = drawPartyBlock(
+    ctx,
+    {
+      name: customer.name,
+      phone: customer.phone,
+      address: customer.address,
+      taxId: customerTaxId(customer),
+    },
+    rightX,
+    right,
+    colW,
+    { nameSize: opts.nameSize },
+  );
+  return Math.max(left, right);
 }
 
 // Item columns, adapted to the invoice: the tax column disappears entirely on
@@ -81,16 +131,25 @@ function hsnAsColumn(
   opts: { tax?: boolean; taxAmount?: boolean },
 ): boolean {
   if (!hasHsn(ctx)) return false;
+  // A narrow table (Modern's, beside its sidebar) cannot spare 72pt: the
+  // item name was left ~67pt wide and broke words mid-way ("Refri / gerant").
+  if (ctx.canvas.contentWidth < 420) return false;
   return !(opts.tax && opts.taxAmount && ctx.spec.hasTax);
 }
 
 function itemColumns(
   ctx: Ctx,
-  opts: { index?: boolean; tax?: boolean; taxAmount?: boolean; label?: string } = {},
+  opts: {
+    index?: boolean;
+    tax?: boolean;
+    taxAmount?: boolean;
+    label?: string;
+  } = {},
 ): TableColumn[] {
   const code = ctx.spec.currency.toUpperCase();
   const cols: TableColumn[] = [];
-  if (opts.index) cols.push({ key: 'index', label: '#', align: 'left', width: 30 });
+  if (opts.index)
+    cols.push({ key: 'index', label: '#', align: 'left', width: 30 });
   cols.push({
     key: 'name',
     label: ctx.spec.itemLabel ?? opts.label ?? 'SERVICE / ITEM',
@@ -109,16 +168,31 @@ function itemColumns(
     cols.push({ key: 'hsn', label: 'HSN/SAC', align: 'left', width: 72 });
   }
   cols.push({ key: 'qty', label: 'QTY', align: 'right', width: 40 });
-  cols.push({ key: 'rate', label: 'RATE (' + code + ')', align: 'right', width: 82 });
+  cols.push({
+    key: 'rate',
+    label: 'RATE (' + code + ')',
+    align: 'right',
+    width: 82,
+  });
   if (opts.tax && ctx.spec.hasTax) {
     cols.push({ key: 'taxRate', label: 'TAX', align: 'right', width: 40 });
   }
   if (opts.taxAmount && ctx.spec.hasTax) {
-    cols.push({ key: 'taxAmount', label: 'TAX AMT', align: 'right', width: 60 });
+    cols.push({
+      key: 'taxAmount',
+      label: 'TAX AMT',
+      align: 'right',
+      width: 60,
+    });
   }
   // Wide enough for 'AMOUNT (AED)' on one line — a 3-letter currency code
   // is the longest case, and a wrapped column header looks broken.
-  cols.push({ key: 'amount', label: 'AMOUNT (' + code + ')', align: 'right', width: 96 });
+  cols.push({
+    key: 'amount',
+    label: 'AMOUNT (' + code + ')',
+    align: 'right',
+    width: 96,
+  });
   return cols;
 }
 
@@ -178,8 +252,11 @@ function standardFooter(
   doc.font('Helvetica').fontSize(8).fillColor(colors.textMuted);
   // The closing line belongs on the last page only; earlier pages say the
   // document continues, so a reader can tell when a page is missing.
-  const note = page === pageCount ? spec.footerNote : spec.number + ' — continued';
-  doc.text(note, x, y, { width: width * 0.72 });
+  const note =
+    page === pageCount ? spec.footerNote : spec.number + ' — continued';
+  // Two lines at most: the business's bottom message can be a sentence or
+  // two, and a third line would run off the foot of the page.
+  doc.text(note, x, y - 4, { width: width * 0.72, height: 22, ellipsis: true });
   if (pageCount > 1) {
     doc.text('Page ' + page + ' of ' + pageCount, x + width * 0.72, y, {
       width: width * 0.28,
@@ -204,10 +281,15 @@ function slimContinuation(ctx: Ctx, accentRule: boolean): number {
     .font('Helvetica')
     .fontSize(9)
     .fillColor(colors.textSecondary)
-    .text(spec.title + ' ' + spec.number + ' (continued)', x + width * 0.58, geo.margin + 1, {
-      width: width * 0.42,
-      align: 'right',
-    });
+    .text(
+      spec.title + ' ' + spec.number + ' (continued)',
+      x + width * 0.58,
+      geo.margin + 1,
+      {
+        width: width * 0.42,
+        align: 'right',
+      },
+    );
 
   const ruleY = geo.margin + 20;
   doc
@@ -273,7 +355,12 @@ const classic: LayoutDefinition = {
     const metaW = 186;
     const metaX = geo.width - geo.margin - metaW;
     let metaY = y + 1;
-    metaRowsWithNumber(spec).forEach((row) => {
+    // Payment terms sit with the other document facts now that the parties
+    // row is Bill From / Bill To.
+    const classicMeta = metaRowsWithNumber(spec);
+    if (spec.paymentTerms)
+      classicMeta.push({ label: 'Payment Terms', value: spec.paymentTerms });
+    classicMeta.forEach((row) => {
       doc
         .font('Helvetica')
         .fontSize(8.5)
@@ -283,7 +370,10 @@ const classic: LayoutDefinition = {
         .font('Helvetica-Bold')
         .fontSize(9)
         .fillColor(colors.text)
-        .text(row.value, metaX + 84, metaY, { width: metaW - 84, align: 'right' });
+        .text(row.value, metaX + 84, metaY, {
+          width: metaW - 84,
+          align: 'right',
+        });
       metaY += 14;
     });
 
@@ -297,57 +387,19 @@ const classic: LayoutDefinition = {
 
     // --- Parties --------------------------------------------------------
     y += 16;
-    const colW = (width - 34) / 2;
-    let leftEnd = drawSectionLabel(ctx, spec.recipientLabel, x, y, colW);
-    leftEnd = drawPartyBlock(
-      ctx,
-      {
-        name: customer.name,
-        phone: customer.phone,
-        address: customer.address,
-        taxId: customerTaxId(customer),
-      },
-      x,
-      leftEnd,
-      colW,
-    );
-
-    const rightX = x + colW + 34;
-    // A purchase order is addressed to a supplier and has no service address;
-    // drawing the block anyway printed "SERVICE ADDRESS / Not recorded" on
-    // every PO.
-    let rightEnd = y;
-    if (spec.show?.serviceAddress !== false) {
-      rightEnd = drawSectionLabel(ctx, 'SERVICE ADDRESS', rightX, y, colW);
-      doc.font('Helvetica').fontSize(9).fillColor(colors.textSecondary);
-      // The app keeps one address per customer, and for a field-service call
-      // it is where the work happens — so this states that rather than
-      // reprinting the same lines under a second heading.
-      doc.text(
-        customer.address ? 'Same as billing address' : 'Not recorded',
-        rightX,
-        rightEnd,
-        { width: colW },
-      );
-      rightEnd = doc.y + 4;
-    }
-    if (spec.paymentTerms) {
-      rightEnd = drawSectionLabel(ctx, 'PAYMENT TERMS', rightX, rightEnd + 6, colW);
-      doc
-        .font('Helvetica-Bold')
-        .fontSize(9)
-        .fillColor(colors.text)
-        .text(spec.paymentTerms, rightX, rightEnd, { width: colW });
-      rightEnd = doc.y;
-    }
-
-    canvas.y = Math.max(leftEnd, rightEnd) + 20;
+    canvas.y = drawFromTo(ctx, x, y, width, { gap: 34 }) + 20;
 
     // --- Items ----------------------------------------------------------
-    drawTable(ctx, itemColumns(ctx, { index: true, tax: true }), itemRows(ctx, { index: true, tax: true }), {
-      ...DEFAULT_TABLE_STYLE,
-      headerFill: 'tint',
-    });
+    drawTopMessage(ctx);
+    drawTable(
+      ctx,
+      itemColumns(ctx, { index: true, tax: true }),
+      itemRows(ctx, { index: true, tax: true }),
+      {
+        ...DEFAULT_TABLE_STYLE,
+        headerFill: 'tint',
+      },
+    );
     canvas.y += 18;
 
     // --- Payment instructions beside the totals ------------------------
@@ -406,15 +458,13 @@ const modern: LayoutDefinition = {
     canvas.contentX = MODERN_BODY_X;
     canvas.contentWidth = geo.width - MODERN_BODY_X - geo.margin;
     const { doc: d } = ctx;
-    d
-      .font('Helvetica-Bold')
+    d.font('Helvetica-Bold')
       .fontSize(11)
       .fillColor(colors.text)
       .text(ctx.business.name, canvas.contentX, geo.margin, {
         width: canvas.contentWidth * 0.55,
       });
-    d
-      .font('Helvetica')
+    d.font('Helvetica')
       .fontSize(9)
       .fillColor(colors.textSecondary)
       .text(
@@ -424,8 +474,7 @@ const modern: LayoutDefinition = {
         { width: canvas.contentWidth * 0.45, align: 'right' },
       );
     const ruleY = geo.margin + 20;
-    d
-      .moveTo(canvas.contentX, ruleY)
+    d.moveTo(canvas.contentX, ruleY)
       .lineTo(canvas.contentX + canvas.contentWidth, ruleY)
       .strokeColor(colors.border)
       .lineWidth(0.8)
@@ -484,7 +533,9 @@ const modern: LayoutDefinition = {
         .font('Helvetica')
         .fontSize(7.5)
         .fillColor(colors.onPrimaryMuted)
-        .text(taxIdLabel(spec.taxType, spec.country), pad, barY + 6, { width: barInner });
+        .text(taxIdLabel(spec.taxType, spec.country), pad, barY + 6, {
+          width: barInner,
+        });
       doc
         .font('Helvetica-Bold')
         .fontSize(8.5)
@@ -502,7 +553,10 @@ const modern: LayoutDefinition = {
         .font('Helvetica-Bold')
         .fontSize(8)
         .fillColor(colors.onPrimaryMuted)
-        .text('HOW TO PAY', pad, barY, { width: barInner, characterSpacing: 1 });
+        .text('HOW TO PAY', pad, barY, {
+          width: barInner,
+          characterSpacing: 1,
+        });
       barY = doc.y + 6;
       payLines.forEach((line) => {
         doc
@@ -545,29 +599,19 @@ const modern: LayoutDefinition = {
         .font('Helvetica-Bold')
         .fontSize(8.5)
         .fillColor(colors.text)
-        .text(row.value, metaX + 78, metaY, { width: metaW - 78, align: 'right' });
+        .text(row.value, metaX + 78, metaY, {
+          width: metaW - 78,
+          align: 'right',
+        });
       metaY += 13;
     });
 
     // --- Recipient ------------------------------------------------------
-    let y = Math.max(98, metaY + 16);
-    let end = drawSectionLabel(ctx, spec.recipientLabel, x, y, width * 0.62);
-    end = drawPartyBlock(
-      ctx,
-      {
-        name: customer.name,
-        phone: customer.phone,
-        address: customer.address,
-        taxId: customerTaxId(customer),
-      },
-      x,
-      end,
-      width * 0.62,
-      { nameSize: 13 },
-    );
-    canvas.y = end + 22;
+    const y = Math.max(98, metaY + 16);
+    canvas.y = drawFromTo(ctx, x, y, width, { nameSize: 12, gap: 20 }) + 22;
 
     // --- Items: minimal ruling, no zebra -------------------------------
+    drawTopMessage(ctx);
     drawTable(ctx, itemColumns(ctx), itemRows(ctx), {
       ...DEFAULT_TABLE_STYLE,
       zebra: false,
@@ -590,12 +634,17 @@ const modern: LayoutDefinition = {
       drawTextPanel(ctx, 'NOTES', spec.notes, { x, width, variant: 'ruled' });
     }
     if (spec.terms) {
-      drawTextPanel(ctx, 'TERMS & CONDITIONS', spec.terms, { x, width, variant: 'ruled' });
+      drawTextPanel(ctx, 'TERMS & CONDITIONS', spec.terms, {
+        x,
+        width,
+        variant: 'ruled',
+      });
     }
-    if (business.signature) {
-      canvas.ensure(measureSignature(ctx));
-      drawSignatureBlock(ctx, canvas.y, x + width);
-    }
+    // Drawn whenever the signature setting is on, image or not — a printed
+    // copy still needs a line to sign on. The setting itself is checked
+    // inside drawSignatureBlock / measureSignature.
+    canvas.ensure(measureSignature(ctx));
+    drawSignatureBlock(ctx, canvas.y, x + width);
   },
 };
 
@@ -607,7 +656,8 @@ const modern: LayoutDefinition = {
 
 const minimal: LayoutDefinition = {
   continuation: (ctx) => slimContinuation(ctx, false),
-  footer: (ctx, page, pageCount) => standardFooter(ctx, page, pageCount, { rule: false }),
+  footer: (ctx, page, pageCount) =>
+    standardFooter(ctx, page, pageCount, { rule: false }),
   draw: (ctx) => {
     const { doc, colors, geo, business, customer, spec, canvas } = ctx;
     const x = geo.margin;
@@ -651,10 +701,15 @@ const minimal: LayoutDefinition = {
       doc
         .fontSize(8)
         .fillColor(colors.textMuted)
-        .text(taxIdLabel(spec.taxType, spec.country) + ' ' + taxId, rightX, rightEnd + 2, {
-          width: rightW,
-          align: 'right',
-        });
+        .text(
+          taxIdLabel(spec.taxType, spec.country) + ' ' + taxId,
+          rightX,
+          rightEnd + 2,
+          {
+            width: rightW,
+            align: 'right',
+          },
+        );
       rightEnd = doc.y;
     }
 
@@ -687,29 +742,19 @@ const minimal: LayoutDefinition = {
         .font('Helvetica')
         .fontSize(9)
         .fillColor(colors.text)
-        .text(row.value, metaX + 92, metaY, { width: metaW - 92, align: 'right' });
+        .text(row.value, metaX + 92, metaY, {
+          width: metaW - 92,
+          align: 'right',
+        });
       metaY += 14;
     });
 
     // --- Recipient ------------------------------------------------------
     y = Math.max(y + 38, metaY + 14);
-    let end = drawSectionLabel(ctx, spec.recipientLabel, x, y, width * 0.55);
-    end = drawPartyBlock(
-      ctx,
-      {
-        name: customer.name,
-        phone: customer.phone,
-        address: customer.address,
-        taxId: customerTaxId(customer),
-      },
-      x,
-      end,
-      width * 0.55,
-      { nameSize: 13 },
-    );
-    canvas.y = end + 26;
+    canvas.y = drawFromTo(ctx, x, y, width, { nameSize: 12 }) + 26;
 
     // --- Items: hairlines only ------------------------------------------
+    drawTopMessage(ctx);
     drawTable(ctx, itemColumns(ctx, { label: 'DESCRIPTION' }), itemRows(ctx), {
       ...DEFAULT_TABLE_STYLE,
       cellPadX: 0,
@@ -749,10 +794,11 @@ const minimal: LayoutDefinition = {
     if (spec.terms) {
       drawTextPanel(ctx, 'TERMS', spec.terms, { x, width, variant: 'ruled' });
     }
-    if (business.signature) {
-      canvas.ensure(measureSignature(ctx));
-      drawSignatureBlock(ctx, canvas.y, x + width);
-    }
+    // Drawn whenever the signature setting is on, image or not — a printed
+    // copy still needs a line to sign on. The setting itself is checked
+    // inside drawSignatureBlock / measureSignature.
+    canvas.ensure(measureSignature(ctx));
+    drawSignatureBlock(ctx, canvas.y, x + width);
   },
 };
 
@@ -805,14 +851,25 @@ const formal: LayoutDefinition = {
       business.phone,
       business.email,
       businessTaxId(business)
-        ? taxIdLabel(spec.taxType, spec.country) + ': ' + businessTaxId(business)
+        ? taxIdLabel(spec.taxType, spec.country) +
+          ': ' +
+          businessTaxId(business)
         : undefined,
     ].filter(Boolean) as string[];
     doc.font('Helvetica').fontSize(7.5).fillColor(colors.textSecondary);
-    doc.text(regLines.join('\n'), regX, 32, { width: regW, align: 'right', lineGap: 1.5 });
+    doc.text(regLines.join('\n'), regX, 32, {
+      width: regW,
+      align: 'right',
+      lineGap: 1.5,
+    });
 
     let y = Math.max(doc.y, leftBottom, 76) + 14;
-    doc.moveTo(x, y).lineTo(x + width, y).strokeColor(colors.text).lineWidth(1).stroke();
+    doc
+      .moveTo(x, y)
+      .lineTo(x + width, y)
+      .strokeColor(colors.text)
+      .lineWidth(1)
+      .stroke();
     doc
       .moveTo(x, y + 2.5)
       .lineTo(x + width, y + 2.5)
@@ -827,7 +884,7 @@ const formal: LayoutDefinition = {
     const parties = [
       {
         px: x,
-        label: 'BILL FROM',
+        label: spec.senderLabel ?? 'BILL FROM',
         party: {
           name: business.name,
           phone: business.phone,
@@ -851,9 +908,16 @@ const formal: LayoutDefinition = {
     // square whatever the address lengths are.
     const panelHeights = parties.map(({ party }) => {
       const lines = [party.phone, party.address].filter(Boolean) as string[];
-      const nameH = measureText(doc, party.name, panelW - 20, 'Helvetica-Bold', 11);
+      const nameH = measureText(
+        doc,
+        party.name,
+        panelW - 20,
+        'Helvetica-Bold',
+        11,
+      );
       const bodyH = lines.reduce(
-        (sum, line) => sum + measureText(doc, line, panelW - 20, 'Helvetica', 9) + 1,
+        (sum, line) =>
+          sum + measureText(doc, line, panelW - 20, 'Helvetica', 9) + 1,
         0,
       );
       return nameH + bodyH + (party.taxId ? 16 : 0) + 34;
@@ -861,13 +925,20 @@ const formal: LayoutDefinition = {
     const panelH = Math.max(Math.max(...panelHeights), 74);
 
     parties.forEach(({ px, label, party }) => {
-      doc.rect(px, y, panelW, panelH).lineWidth(0.8).strokeColor(colors.border).stroke();
+      doc
+        .rect(px, y, panelW, panelH)
+        .lineWidth(0.8)
+        .strokeColor(colors.border)
+        .stroke();
       doc.rect(px, y, panelW, 17).fill(colors.tintBg);
       doc
         .font('Helvetica-Bold')
         .fontSize(7.5)
         .fillColor(colors.tintText)
-        .text(label, px + 10, y + 5, { width: panelW - 20, characterSpacing: 1 });
+        .text(label, px + 10, y + 5, {
+          width: panelW - 20,
+          characterSpacing: 1,
+        });
       drawPartyBlock(ctx, party, px + 10, y + 24, panelW - 20, {
         nameSize: 11,
         compact: true,
@@ -882,7 +953,11 @@ const formal: LayoutDefinition = {
     }
     if (stripRows.length) {
       const stripH = 30;
-      doc.rect(x, y, width, stripH).lineWidth(0.8).strokeColor(colors.border).stroke();
+      doc
+        .rect(x, y, width, stripH)
+        .lineWidth(0.8)
+        .strokeColor(colors.border)
+        .stroke();
       const cellW = width / stripRows.length;
       stripRows.forEach((row, i) => {
         const cx = x + cellW * i;
@@ -913,9 +988,15 @@ const formal: LayoutDefinition = {
     canvas.y = y;
 
     // --- Fully ruled table, with per-line tax --------------------------
+    drawTopMessage(ctx);
     drawTable(
       ctx,
-      itemColumns(ctx, { index: true, tax: true, taxAmount: true, label: 'DESCRIPTION' }),
+      itemColumns(ctx, {
+        index: true,
+        tax: true,
+        taxAmount: true,
+        label: 'DESCRIPTION',
+      }),
       itemRows(ctx, { index: true, tax: true, taxAmount: true }),
       {
         ...DEFAULT_TABLE_STYLE,
@@ -942,7 +1023,8 @@ const formal: LayoutDefinition = {
 
     // --- Amount in words ------------------------------------------------
     const words = amountInWords(spec.grandTotal, spec.currency);
-    const wordsH = measureText(doc, words, width - 20, 'Helvetica-Bold', 9) + 30;
+    const wordsH =
+      measureText(doc, words, width - 20, 'Helvetica-Bold', 9) + 30;
     canvas.ensure(wordsH + 10);
     doc
       .rect(x, canvas.y, width, wordsH)
@@ -976,7 +1058,11 @@ const formal: LayoutDefinition = {
     }
 
     if (spec.terms) {
-      drawTextPanel(ctx, 'TERMS & CONDITIONS', spec.terms, { x, width, variant: 'boxed' });
+      drawTextPanel(ctx, 'TERMS & CONDITIONS', spec.terms, {
+        x,
+        width,
+        variant: 'boxed',
+      });
     }
     if (spec.notes) {
       drawTextPanel(ctx, 'NOTES', spec.notes, { x, width, variant: 'boxed' });
@@ -1020,7 +1106,11 @@ const compact: LayoutDefinition = {
       .font('Helvetica-Bold')
       .fontSize(13)
       .text(business.name, x + 38, 12, { width: 230 });
-    const stripMeta = [business.phone, businessTaxId(business)]
+    const stripMeta = [
+      business.tradeType,
+      business.phone,
+      businessTaxId(business),
+    ]
       .filter(Boolean)
       .join('  ·  ');
     if (stripMeta) {
@@ -1037,7 +1127,11 @@ const compact: LayoutDefinition = {
       .font('Helvetica')
       .fontSize(7.5)
       .fillColor(colors.onPrimaryMuted)
-      .text(spec.title, insetX, 11, { width: insetW, align: 'right', characterSpacing: 1 });
+      .text(spec.title, insetX, 11, {
+        width: insetW,
+        align: 'right',
+        characterSpacing: 1,
+      });
     doc
       .font('Helvetica-Bold')
       .fontSize(14)
@@ -1050,27 +1144,36 @@ const compact: LayoutDefinition = {
         .font('Helvetica')
         .fontSize(7.5)
         .fillColor(colors.onPrimaryMuted)
-        .text(spec.metaRows[0].value, insetX, 39, { width: insetW, align: 'right' });
+        .text(spec.metaRows[0].value, insetX, 39, {
+          width: insetW,
+          align: 'right',
+        });
     }
 
     // --- Three-cell context row: who / where / which job ----------------
     const svc = spec.serviceContext;
+    // Bill From / Bill To like every other layout; the customer's address
+    // rides in Bill To rather than a separate "service address" cell.
     const cells: { label: string; lines: string[] }[] = [
       {
-        label: 'CUSTOMER',
-        lines: [customer.name, customer.phone].filter(Boolean) as string[],
+        label: spec.senderLabel ?? 'BILL FROM',
+        lines: [business.name, business.phone, businessTaxId(business)].filter(
+          Boolean,
+        ) as string[],
+      },
+      {
+        label: spec.recipientLabel,
+        lines: [customer.name, customer.phone, customer.address].filter(
+          Boolean,
+        ) as string[],
       },
     ];
-    if (spec.show?.serviceAddress !== false) {
-      cells.push({
-        label: 'SERVICE ADDRESS',
-        lines: [customer.address ?? 'Not recorded'],
-      });
-    }
     const jobLines: string[] = [];
     if (svc?.technicianName) jobLines.push(svc.technicianName);
     if (svc?.jobReference) jobLines.push('Job ' + svc.jobReference);
-    spec.metaRows.slice(1).forEach((row) => jobLines.push(row.label + ': ' + row.value));
+    spec.metaRows
+      .slice(1)
+      .forEach((row) => jobLines.push(row.label + ': ' + row.value));
     cells.push({
       label: svc?.technicianName ? 'TECHNICIAN / JOB' : 'INVOICE DETAILS',
       lines: jobLines.length ? jobLines : ['—'],
@@ -1080,7 +1183,8 @@ const compact: LayoutDefinition = {
     const cellW = width / cells.length;
     const cellHeights = cells.map((cell) =>
       cell.lines.reduce(
-        (sum, line) => sum + measureText(doc, line, cellW - 22, 'Helvetica', 8.5) + 1,
+        (sum, line) =>
+          sum + measureText(doc, line, cellW - 22, 'Helvetica', 8.5) + 1,
         0,
       ),
     );
@@ -1100,7 +1204,10 @@ const compact: LayoutDefinition = {
         .font('Helvetica-Bold')
         .fontSize(7)
         .fillColor(colors.tintText)
-        .text(cell.label, cx + 11, y + 7, { width: cellW - 22, characterSpacing: 0.8 });
+        .text(cell.label, cx + 11, y + 7, {
+          width: cellW - 22,
+          characterSpacing: 0.8,
+        });
       let ly = y + 18;
       cell.lines.forEach((line, index) => {
         doc
@@ -1114,14 +1221,20 @@ const compact: LayoutDefinition = {
     canvas.y = y + rowH + 12;
 
     // --- Dense items ----------------------------------------------------
-    drawTable(ctx, itemColumns(ctx, { index: true }), itemRows(ctx, { index: true }), {
-      ...DEFAULT_TABLE_STYLE,
-      scale: s,
-      cellPadX: 8,
-      headerHeight: 22,
-      zebra: true,
-      headerFill: 'tint',
-    });
+    drawTopMessage(ctx);
+    drawTable(
+      ctx,
+      itemColumns(ctx, { index: true }),
+      itemRows(ctx, { index: true }),
+      {
+        ...DEFAULT_TABLE_STYLE,
+        scale: s,
+        cellPadX: 8,
+        headerHeight: 22,
+        zebra: true,
+        headerFill: 'tint',
+      },
+    );
     canvas.y += 10;
 
     // --- Totals, tight, right ------------------------------------------
@@ -1142,14 +1255,17 @@ const compact: LayoutDefinition = {
     const paymentValue: string[] = [];
     if (spec.payment?.method) paymentValue.push(spec.payment.method);
     if (spec.payment?.paidLabel) paymentValue.push(spec.payment.paidLabel);
-    // Skip an instruction line that just restates the method already shown
-    // above it ("UPI" then "UPI: name@bank").
-    const extraPayLine = payLines.find(
-      (line) => line.label.toLowerCase() !== (spec.payment?.method ?? '').toLowerCase(),
-    );
-    if (extraPayLine) {
-      paymentValue.push(extraPayLine.label + ': ' + extraPayLine.value);
-    }
+    // Every instruction the business has switched on (UPI, bank, cash…), but
+    // not one that just restates the method already shown above it ("UPI"
+    // then "UPI: name@bank"). Showing only the first used to drop the rest —
+    // "Cash: Accepted" never appeared on this layout.
+    payLines
+      .filter(
+        (line) =>
+          line.label.toLowerCase() !==
+          (spec.payment?.method ?? '').toLowerCase(),
+      )
+      .forEach((line) => paymentValue.push(line.label + ': ' + line.value));
     gridCells.push({
       label: 'PAYMENT',
       lines: paymentValue.length ? paymentValue : ['—'],
@@ -1158,28 +1274,40 @@ const compact: LayoutDefinition = {
 
     const dateLines: string[] = [];
     if (svc?.serviceDate) {
-      dateLines.push('Service: ' + formatShortDate(svc.serviceDate, spec.country));
+      dateLines.push(
+        'Service: ' + formatShortDate(svc.serviceDate, spec.country),
+      );
     }
     if (svc?.nextServiceDate) {
-      dateLines.push('Next due: ' + formatShortDate(svc.nextServiceDate, spec.country));
+      dateLines.push(
+        'Next due: ' + formatShortDate(svc.nextServiceDate, spec.country),
+      );
     }
-    if (dateLines.length) gridCells.push({ label: 'SERVICE DATES', lines: dateLines });
+    if (dateLines.length)
+      gridCells.push({ label: 'SERVICE DATES', lines: dateLines });
 
-    const noteLines = [svc?.serviceNotes, spec.notes].filter(Boolean) as string[];
+    const noteLines = [svc?.serviceNotes, spec.notes].filter(
+      Boolean,
+    ) as string[];
     if (noteLines.length) gridCells.push({ label: 'NOTES', lines: noteLines });
 
     const gCellW = width / gridCells.length;
     const gridHeights = gridCells.map(
       (cell) =>
         cell.lines.reduce(
-          (sum, line) => sum + measureText(doc, line, gCellW - 22, 'Helvetica', 8) + 1,
+          (sum, line) =>
+            sum + measureText(doc, line, gCellW - 22, 'Helvetica', 8) + 1,
           0,
         ) + (cell.pill ? 18 : 0),
     );
     const gridH = Math.max(Math.max(...gridHeights), 26) + 22;
     canvas.ensure(gridH + 10);
     const gridTop = canvas.y;
-    doc.rect(x, gridTop, width, gridH).lineWidth(0.8).strokeColor(colors.border).stroke();
+    doc
+      .rect(x, gridTop, width, gridH)
+      .lineWidth(0.8)
+      .strokeColor(colors.border)
+      .stroke();
     gridCells.forEach((cell, i) => {
       const cx = x + gCellW * i;
       if (i > 0) {
@@ -1221,10 +1349,11 @@ const compact: LayoutDefinition = {
         scale: 0.92,
       });
     }
-    if (business.signature) {
-      canvas.ensure(measureSignature(ctx));
-      drawSignatureBlock(ctx, canvas.y, x + width, 140);
-    }
+    // Drawn whenever the signature setting is on, image or not — a printed
+    // copy still needs a line to sign on. The setting itself is checked
+    // inside drawSignatureBlock / measureSignature.
+    canvas.ensure(measureSignature(ctx));
+    drawSignatureBlock(ctx, canvas.y, x + width, 140);
   },
 };
 
@@ -1234,4 +1363,5 @@ export const DOCUMENT_LAYOUTS: Record<DocumentLayoutId, LayoutDefinition> = {
   letterhead: minimal,
   formal,
   dense: compact,
+  showcase: premiumLayout,
 };

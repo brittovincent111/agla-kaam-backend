@@ -1,6 +1,9 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
-import { QUOTATION_STATUSES, QuotationStatus } from '../../common/constants/quotation-options';
+import {
+  QUOTATION_STATUSES,
+  QuotationStatus,
+} from '../../common/constants/quotation-options';
 import { QuotationItem, QuotationItemSchema } from './quotation-item.schema';
 
 export type QuotationDocument = HydratedDocument<Quotation>;
@@ -22,7 +25,12 @@ export class Quotation {
   @Prop({ required: true })
   validUntil: Date;
 
-  @Prop({ required: true, enum: QUOTATION_STATUSES, default: 'draft', index: true })
+  @Prop({
+    required: true,
+    enum: QUOTATION_STATUSES,
+    default: 'draft',
+    index: true,
+  })
   status: QuotationStatus;
 
   // Snapshotted from the business at creation time, same reasoning as
@@ -32,7 +40,11 @@ export class Quotation {
   @Prop({ required: true, default: 'INR', uppercase: true, trim: true })
   currency: string;
 
-  @Prop({ required: true, default: 'gst', enum: ['gst', 'vat', 'sales_tax', 'none'] })
+  @Prop({
+    required: true,
+    default: 'gst',
+    enum: ['gst', 'vat', 'sales_tax', 'none'],
+  })
   taxType: string;
 
   @Prop({ type: [QuotationItemSchema], default: [] })
@@ -70,3 +82,6 @@ export class Quotation {
 export const QuotationSchema = SchemaFactory.createForClass(Quotation);
 QuotationSchema.index({ businessId: 1, quotationNumber: 1 }, { unique: true });
 QuotationSchema.index({ businessId: 1, validUntil: 1 });
+
+// Listings and paging sort on quotationDate desc; only validUntil was indexed.
+QuotationSchema.index({ businessId: 1, quotationDate: -1, _id: -1 });

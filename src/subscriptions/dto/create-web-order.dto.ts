@@ -1,5 +1,14 @@
-import { IsBoolean, IsIn, IsOptional, IsString, MinLength } from 'class-validator';
-import { SUBSCRIPTION_TIERS, SubscriptionTier } from '../../common/constants/subscription-options';
+import {
+  IsBoolean,
+  IsIn,
+  IsOptional,
+  IsString,
+  MinLength,
+} from 'class-validator';
+import {
+  SUBSCRIPTION_TIERS,
+  SubscriptionTier,
+} from '../../common/constants/subscription-options';
 
 // This endpoint is intentionally unauthenticated (a website visitor buying a
 // plan isn't logged in to anything), which makes real input validation more

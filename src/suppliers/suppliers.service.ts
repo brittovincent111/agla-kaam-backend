@@ -1,4 +1,8 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Supplier, SupplierDocument } from './schemas/supplier.schema';
@@ -27,7 +31,10 @@ export class SuppliersService {
     private readonly supplierModel: Model<SupplierDocument>,
   ) {}
 
-  async create(businessId: string, dto: CreateSupplierDto): Promise<SupplierDocument> {
+  async create(
+    businessId: string,
+    dto: CreateSupplierDto,
+  ): Promise<SupplierDocument> {
     // Matched on digits, not the literal string, so the same supplier stored
     // as "9876543210" and "+91 98765 43210" is caught once.
     const patterns = phoneMatchPatterns(dto.phone);
@@ -57,8 +64,15 @@ export class SuppliersService {
   async findPage(
     businessId: string,
     options: { search?: string; limit?: number; cursor?: string },
-  ): Promise<{ items: SupplierDocument[]; nextCursor: string | null; total?: number }> {
-    const limit = Math.min(Math.max(options.limit ?? DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
+  ): Promise<{
+    items: SupplierDocument[];
+    nextCursor: string | null;
+    total?: number;
+  }> {
+    const limit = Math.min(
+      Math.max(options.limit ?? DEFAULT_PAGE_SIZE, 1),
+      MAX_PAGE_SIZE,
+    );
     const cursor = decodeCursor(options.cursor);
 
     // andFilters rather than a spread: scope, search and cursor are each a
@@ -72,8 +86,14 @@ export class SuppliersService {
     // One extra row reveals whether another page exists without a count().
     // The count runs only for the first page, where the app displays it.
     const [rows, total] = await Promise.all([
-      this.supplierModel.find(filter).sort({ name: 1, _id: 1 }).limit(limit + 1).exec(),
-      cursor ? Promise.resolve(undefined) : this.supplierModel.countDocuments(filter).exec(),
+      this.supplierModel
+        .find(filter)
+        .sort({ name: 1, _id: 1 })
+        .limit(limit + 1)
+        .exec(),
+      cursor
+        ? Promise.resolve(undefined)
+        : this.supplierModel.countDocuments(filter).exec(),
     ]);
 
     const hasMore = rows.length > limit;
@@ -82,13 +102,17 @@ export class SuppliersService {
     return {
       items,
       nextCursor:
-        hasMore && last ? encodeCursor({ name: last.name, id: last.id as string }) : null,
+        hasMore && last
+          ? encodeCursor({ name: last.name, id: last.id as string })
+          : null,
       total,
     };
   }
 
   async findOne(businessId: string, id: string): Promise<SupplierDocument> {
-    const supplier = await this.supplierModel.findOne({ _id: id, businessId }).exec();
+    const supplier = await this.supplierModel
+      .findOne({ _id: id, businessId })
+      .exec();
     if (!supplier) throw new NotFoundException('Supplier not found');
     return supplier;
   }
@@ -106,7 +130,9 @@ export class SuppliersService {
   }
 
   async remove(businessId: string, id: string): Promise<void> {
-    const res = await this.supplierModel.deleteOne({ _id: id, businessId }).exec();
+    const res = await this.supplierModel
+      .deleteOne({ _id: id, businessId })
+      .exec();
     if (!res.deletedCount) throw new NotFoundException('Supplier not found');
   }
 }

@@ -39,6 +39,7 @@ const PAYMENT_METHOD_LABELS: Record<string, string> = {
 // apply: the schema carries no discount and no per-line tax, so
 // purchaseShowDiscount and purchaseShowTax have nothing to gate.
 type PurchaseRenderBusiness = RenderBusiness & {
+  purchaseTopMessage?: string;
   purchaseShowBankInfo?: boolean;
   purchaseBottomMessage?: string;
   purchaseShowHsn?: boolean;
@@ -59,7 +60,8 @@ export class PurchasePdfService {
     accentColor?: string | null,
     geometry: PageGeometry = A4,
   ): Promise<Buffer> {
-    const business = await this.businessesService.findByIdWithBranding(businessId);
+    const business =
+      await this.businessesService.findByIdWithBranding(businessId);
 
     let paymentQrBuffer: Buffer | undefined;
     const qrText =
@@ -69,13 +71,22 @@ export class PurchasePdfService {
         : undefined);
     if (qrText) {
       try {
-        paymentQrBuffer = await QRCode.toBuffer(qrText, { margin: 1, width: 200 });
+        paymentQrBuffer = await QRCode.toBuffer(qrText, {
+          margin: 1,
+          width: 200,
+        });
       } catch {
         // Fall through without a QR rather than failing the whole document.
       }
     }
 
-    return this.render({ ...business, paymentQrBuffer }, purchase, templateId, accentColor, geometry);
+    return this.render(
+      { ...business, paymentQrBuffer },
+      purchase,
+      templateId,
+      accentColor,
+      geometry,
+    );
   }
 
   // Split out from generate() the same way the invoice service does, so a
@@ -100,10 +111,18 @@ export class PurchasePdfService {
 
     const metaRows = [
       { label: 'Date', value: formatDate(purchase.purchaseDate, country) },
-      { label: 'Payment', value: PAYMENT_METHOD_LABELS[purchase.paymentMethod] ?? purchase.paymentMethod },
+      {
+        label: 'Payment',
+        value:
+          PAYMENT_METHOD_LABELS[purchase.paymentMethod] ??
+          purchase.paymentMethod,
+      },
     ];
     if (purchase.supplierInvoiceNumber) {
-      metaRows.push({ label: 'Supplier Inv.', value: purchase.supplierInvoiceNumber });
+      metaRows.push({
+        label: 'Supplier Inv.',
+        value: purchase.supplierInvoiceNumber,
+      });
     }
 
     // A purchase line stores costPrice where a sales line stores rate, and
@@ -132,7 +151,10 @@ export class PurchasePdfService {
       title: 'PURCHASE ORDER',
       number: purchase.purchaseNumber,
       numberLabel: 'PO No.',
-      recipientLabel: 'SUPPLIER',
+      // The supplier bills the business on a purchase order, so the pair
+      // reads the other way round from an invoice.
+      senderLabel: 'BILL TO',
+      recipientLabel: 'BILL FROM',
       status: STATUS_LABELS[purchase.paymentStatus] ?? STATUS_LABELS.unpaid,
       metaRows,
       items,
@@ -142,8 +164,10 @@ export class PurchasePdfService {
       currency,
       taxType: 'none',
       country,
+      topMessage: business.purchaseTopMessage,
       footerNote:
-        business.purchaseBottomMessage?.trim() || `Purchase order from ${business.name}`,
+        business.purchaseBottomMessage?.trim() ||
+        `Purchase order from ${business.name}`,
       // No per-line tax on a purchase, so the tax column is always dropped.
       hasTax: false,
       taxLabel: '',

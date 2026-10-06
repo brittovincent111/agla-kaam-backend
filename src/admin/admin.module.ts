@@ -5,12 +5,21 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
 import { AdminAuthGuard } from './admin-auth.guard';
-import { Business, BusinessSchema } from '../businesses/schemas/business.schema';
-import { Subscription, SubscriptionSchema } from '../subscriptions/schemas/subscription.schema';
+import {
+  Business,
+  BusinessSchema,
+} from '../businesses/schemas/business.schema';
+import {
+  Subscription,
+  SubscriptionSchema,
+} from '../subscriptions/schemas/subscription.schema';
 import { Customer, CustomerSchema } from '../customers/schemas/customer.schema';
 import { Service, ServiceSchema } from '../services/schemas/service.schema';
 import { Invoice, InvoiceSchema } from '../invoicing/schemas/invoice.schema';
-import { AppFeedback, AppFeedbackSchema } from '../app-feedback/schemas/app-feedback.schema';
+import {
+  AppFeedback,
+  AppFeedbackSchema,
+} from '../app-feedback/schemas/app-feedback.schema';
 
 @Module({
   imports: [

@@ -17,7 +17,7 @@ export function phoneMatchPatterns(rawPhone: string): string[] {
 
   const isIndian =
     rawPhone.trim().startsWith('+91') ||
-    digits.startsWith('91') && digits.length === 12 ||
+    (digits.startsWith('91') && digits.length === 12) ||
     digits.length <= 11;
 
   if (isIndian) {

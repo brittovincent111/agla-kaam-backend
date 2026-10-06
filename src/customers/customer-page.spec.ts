@@ -60,7 +60,9 @@ describe('customer search', () => {
   // customer 4242, and an address-style "Flat 123 Ravi" returned every
   // customer whose phone number happened to contain "123".
   it('does not match a phone by digits pulled out of a term containing letters', () => {
-    const filter = searchFilter('Flat 123 Ravi') as { $or: Record<string, any>[] };
+    const filter = searchFilter('Flat 123 Ravi') as {
+      $or: Record<string, any>[];
+    };
     const phoneClause = filter.$or.find((clause) => 'phone' in clause);
     expect(phoneClause?.phone.$regex).not.toBe('123');
     expect(phoneClause?.phone.$regex).toContain('Flat 123 Ravi');
@@ -110,12 +112,16 @@ describe('andFilters', () => {
   });
 
   it('returns a lone fragment unwrapped, so the simple case stays simple', () => {
-    expect(andFilters({ businessId: 'b1' }, {}, {})).toEqual({ businessId: 'b1' });
+    expect(andFilters({ businessId: 'b1' }, {}, {})).toEqual({
+      businessId: 'b1',
+    });
   });
 
   it('keeps every $or instead of letting the last one win', () => {
     const filter = andFilters({ businessId: 'b1' }, scope, search, cursor);
-    expect(filter).toEqual({ $and: [{ businessId: 'b1' }, scope, search, cursor] });
+    expect(filter).toEqual({
+      $and: [{ businessId: 'b1' }, scope, search, cursor],
+    });
   });
 
   it('does not lose the technician scope when a search term is present', () => {

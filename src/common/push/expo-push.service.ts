@@ -94,7 +94,10 @@ export class ExpoPushService {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify(
-            batch.map((message) => ({ ...message, channelId: ANDROID_CHANNEL_ID })),
+            batch.map((message) => ({
+              ...message,
+              channelId: ANDROID_CHANNEL_ID,
+            })),
           ),
         });
 

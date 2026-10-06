@@ -27,7 +27,9 @@ export class LeadScheduleService {
     private readonly usageService: ProviderUsageService,
   ) {}
 
-  async createSchedule(dto: CreateLeadScheduleDto): Promise<LeadScheduleDocument> {
+  async createSchedule(
+    dto: CreateLeadScheduleDto,
+  ): Promise<LeadScheduleDocument> {
     const schedule = new this.scheduleModel({
       name: dto.name,
       provider: dto.provider || 'google_places',
@@ -50,7 +52,8 @@ export class LeadScheduleService {
   }
 
   async getSchedule(id: string): Promise<LeadScheduleDocument> {
-    if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid ID');
+    if (!Types.ObjectId.isValid(id))
+      throw new BadRequestException('Invalid ID');
     const schedule = await this.scheduleModel.findById(id);
     if (!schedule) throw new NotFoundException('Schedule not found');
     return schedule;
@@ -74,7 +77,9 @@ export class LeadScheduleService {
     const schedule = await this.getSchedule(id);
 
     // Verify provider quota availability
-    const quota = await this.usageService.checkQuotaAvailable(schedule.provider);
+    const quota = await this.usageService.checkQuotaAvailable(
+      schedule.provider,
+    );
     if (!quota.allowed) {
       throw new BadRequestException(quota.reason);
     }
@@ -101,7 +106,10 @@ export class LeadScheduleService {
   /**
    * Manually triggers active scheduled jobs whose time has arrived or was requested.
    */
-  async triggerDueSchedules(): Promise<{ triggeredCount: number; jobIds: string[] }> {
+  async triggerDueSchedules(): Promise<{
+    triggeredCount: number;
+    jobIds: string[];
+  }> {
     const now = new Date();
     const dueSchedules = await this.scheduleModel.find({
       status: 'ACTIVE',
@@ -110,14 +118,20 @@ export class LeadScheduleService {
 
     if (dueSchedules.length === 0) return { triggeredCount: 0, jobIds: [] };
 
-    this.logger.log(`Triggering ${dueSchedules.length} due lead generation schedules...`);
+    this.logger.log(
+      `Triggering ${dueSchedules.length} due lead generation schedules...`,
+    );
     const jobIds: string[] = [];
 
     for (const schedule of dueSchedules) {
       try {
-        const quota = await this.usageService.checkQuotaAvailable(schedule.provider);
+        const quota = await this.usageService.checkQuotaAvailable(
+          schedule.provider,
+        );
         if (!quota.allowed) {
-          this.logger.warn(`Skipping schedule "${schedule.name}": ${quota.reason}`);
+          this.logger.warn(
+            `Skipping schedule "${schedule.name}": ${quota.reason}`,
+          );
           continue;
         }
 

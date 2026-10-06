@@ -3,6 +3,8 @@ import { getModelToken } from '@nestjs/mongoose';
 import { InventoryService } from './inventory.service';
 import { InventoryItem } from './schemas/inventory-item.schema';
 import { encodePageCursor } from '../common/pagination/cursor-page';
+import { idFilter } from '../common/utils/id-match';
+import { Types } from 'mongoose';
 
 describe('InventoryService', () => {
   let service: InventoryService;
@@ -26,7 +28,9 @@ describe('InventoryService', () => {
   beforeEach(async () => {
     mockModel = jest.fn().mockImplementation((dto) => ({
       ...dto,
-      save: jest.fn().mockResolvedValue({ _id: '507f1f77bcf86cd799439011', ...dto }),
+      save: jest
+        .fn()
+        .mockResolvedValue({ _id: '507f1f77bcf86cd799439011', ...dto }),
     }));
     mockModel.find = jest.fn().mockReturnValue({
       sort: jest.fn().mockReturnValue({
@@ -76,9 +80,88 @@ describe('InventoryService', () => {
     expect(list[0].name).toBe('RO Filter 10 inch');
   });
 
-  it('adjusts stock quantity correctly', async () => {
-    const adjusted = await service.adjustStock('507f1f77bcf86cd799439012', '507f1f77bcf86cd799439011', -3);
+  it('adjusts stock with an atomic $inc rather than read-modify-save', async () => {
+    // Simulates what the database does with $inc, so the test fails if the
+    // service ever goes back to computing the new total in Node — that is
+    // what made two concurrent invoices lose one of their deductions.
+    mockModel.findOneAndUpdate = jest
+      .fn()
+      .mockImplementation((filter, update) => ({
+        exec: jest.fn().mockResolvedValue({
+          ...mockItem,
+          stockQuantity:
+            mockItem.stockQuantity + (update?.$inc?.stockQuantity ?? 0),
+        }),
+      }));
+
+    const adjusted = await service.adjustStock(
+      '507f1f77bcf86cd799439012',
+      '507f1f77bcf86cd799439011',
+      -3,
+    );
+
+    expect(mockModel.findOneAndUpdate).toHaveBeenCalledWith(
+      {
+        _id: '507f1f77bcf86cd799439011',
+        businessId: idFilter('507f1f77bcf86cd799439012'),
+      },
+      { $inc: { stockQuantity: -3 } },
+      { new: true },
+    );
     expect(adjusted.stockQuantity).toBe(7);
+    expect(mockItem.save).not.toHaveBeenCalled();
+  });
+
+  // Items are created with an ObjectId businessId, and businessId is a
+  // Mixed path that does no casting. The update used to filter on the bare
+  // string from the JWT, matched nothing, and every invoice and purchase
+  // silently left stock where it was.
+  it('matches an item whose businessId is stored as an ObjectId', async () => {
+    const biz = '507f1f77bcf86cd799439012';
+    const stored = new Types.ObjectId(biz);
+    mockModel.findOneAndUpdate = jest.fn().mockImplementation((filter) => ({
+      exec: jest
+        .fn()
+        .mockResolvedValue(
+          filter.businessId?.$in?.some(
+            (v: unknown) => v instanceof Types.ObjectId && stored.equals(v),
+          )
+            ? { ...mockItem, stockQuantity: 8 }
+            : null,
+        ),
+    }));
+
+    const adjusted = await service.adjustStock(
+      biz,
+      '507f1f77bcf86cd799439011',
+      -2,
+    );
+    expect(adjusted.stockQuantity).toBe(8);
+  });
+
+  it('reads the catalogue for either stored businessId form', async () => {
+    await service.findAll('507f1f77bcf86cd799439012');
+    expect(mockModel.find).toHaveBeenCalledWith({
+      businessId: idFilter('507f1f77bcf86cd799439012'),
+    });
+  });
+
+  it('clamps a negative result back to zero', async () => {
+    mockModel.findOneAndUpdate = jest
+      .fn()
+      .mockReturnValueOnce({
+        exec: jest.fn().mockResolvedValue({ ...mockItem, stockQuantity: -5 }),
+      })
+      .mockReturnValueOnce({
+        exec: jest.fn().mockResolvedValue({ ...mockItem, stockQuantity: 0 }),
+      });
+
+    const adjusted = await service.adjustStock(
+      '507f1f77bcf86cd799439012',
+      '507f1f77bcf86cd799439011',
+      -15,
+    );
+    expect(adjusted.stockQuantity).toBe(0);
   });
 
   describe('findPageForBusiness', () => {
@@ -97,15 +180,23 @@ describe('InventoryService', () => {
 
     it('asks for one row past the limit, to detect a next page', async () => {
       const { limit } = mockPage([mockItem]);
-      await service.findPageForBusiness('507f1f77bcf86cd799439012', { limit: 20 });
+      await service.findPageForBusiness('507f1f77bcf86cd799439012', {
+        limit: 20,
+      });
       expect(limit).toHaveBeenCalledWith(21);
     });
 
     it('reports a next page and hands back a cursor when the probe row lands', async () => {
-      mockPage([mockItem, { ...mockItem, _id: 'second', name: 'Sediment Filter' }]);
-      const page = await service.findPageForBusiness('507f1f77bcf86cd799439012', {
-        limit: 1,
-      });
+      mockPage([
+        mockItem,
+        { ...mockItem, _id: 'second', name: 'Sediment Filter' },
+      ]);
+      const page = await service.findPageForBusiness(
+        '507f1f77bcf86cd799439012',
+        {
+          limit: 1,
+        },
+      );
       expect(page.items).toHaveLength(1);
       expect(page.nextCursor).not.toBeNull();
       expect(page.total).toBe(2);
@@ -130,7 +221,10 @@ describe('InventoryService', () => {
     it('counts the total only on the first page', async () => {
       mockPage([mockItem]);
       await service.findPageForBusiness('507f1f77bcf86cd799439012', {
-        cursor: encodePageCursor({ v: 'RO Filter', id: '507f1f77bcf86cd799439011' }),
+        cursor: encodePageCursor({
+          v: 'RO Filter',
+          id: '507f1f77bcf86cd799439011',
+        }),
       });
       expect(mockModel.countDocuments).not.toHaveBeenCalled();
     });

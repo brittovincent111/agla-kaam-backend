@@ -1,3 +1,4 @@
+import { UpdateBusinessSubscriptionDto } from './dto/update-business-subscription.dto';
 import {
   Body,
   Controller,
@@ -53,10 +54,7 @@ export class AdminController {
 
   @UseGuards(AdminAuthGuard)
   @Get('feedback')
-  getFeedback(
-    @Query('page') page = '1',
-    @Query('limit') limit = '20',
-  ) {
+  getFeedback(@Query('page') page = '1', @Query('limit') limit = '20') {
     return this.adminService.getFeedbackList(
       parseInt(page, 10) || 1,
       parseInt(limit, 10) || 20,
@@ -74,7 +72,10 @@ export class AdminController {
   async exportCsv(@Res() res: any) {
     const csvContent = await this.adminService.exportBusinessesCsv();
     res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', 'attachment; filename=agla_kaam_businesses.csv');
+    res.setHeader(
+      'Content-Disposition',
+      'attachment; filename=agla_kaam_businesses.csv',
+    );
     return res.status(200).send(csvContent);
   }
 
@@ -88,13 +89,15 @@ export class AdminController {
   @Patch('businesses/:id/subscription')
   updateSubscription(
     @Param('id') id: string,
-    @Body() body: { subscriptionStatus: 'free' | 'active' | 'expired'; tier?: string; renewalDate?: string },
+    @Body() body: UpdateBusinessSubscriptionDto,
   ) {
     return this.adminService.updateBusinessSubscription(
       id,
       body.subscriptionStatus,
       body.tier,
       body.renewalDate,
+      body.teamEnabled,
+      body.teamSeatLimit,
     );
   }
 

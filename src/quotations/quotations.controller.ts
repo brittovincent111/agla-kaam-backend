@@ -1,10 +1,24 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { Roles } from '../common/decorators/roles.decorator';
-import { CurrentBusiness, AuthenticatedBusiness } from '../common/decorators/current-business.decorator';
+import {
+  CurrentBusiness,
+  AuthenticatedBusiness,
+} from '../common/decorators/current-business.decorator';
 import { QuotationsService } from './quotations.service';
 import { QuotationPdfService } from './quotation-pdf.service';
 import { CreateQuotationDto } from './dto/create-quotation.dto';
@@ -31,7 +45,10 @@ export class QuotationsController {
   ) {}
 
   @Post()
-  create(@CurrentBusiness() business: AuthenticatedBusiness, @Body() dto: CreateQuotationDto) {
+  create(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Body() dto: CreateQuotationDto,
+  ) {
     return this.quotationsService.create(business.businessId, dto);
   }
 
@@ -49,7 +66,10 @@ export class QuotationsController {
     @CurrentBusiness() business: AuthenticatedBusiness,
     @Query() query: ListQuotationsDto,
   ) {
-    return this.quotationsService.findPageForBusiness(business.businessId, query);
+    return this.quotationsService.findPageForBusiness(
+      business.businessId,
+      query,
+    );
   }
 
   @Get()
@@ -59,11 +79,18 @@ export class QuotationsController {
     @Query('search') search?: string,
     @Query('customerId') customerId?: string,
   ) {
-    return this.quotationsService.findAllForBusiness(business.businessId, { status, search, customerId });
+    return this.quotationsService.findAllForBusiness(business.businessId, {
+      status,
+      search,
+      customerId,
+    });
   }
 
   @Get(':id')
-  findOne(@CurrentBusiness() business: AuthenticatedBusiness, @Param('id') id: string) {
+  findOne(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+  ) {
     return this.quotationsService.findOnePopulated(business.businessId, id);
   }
 
@@ -77,22 +104,34 @@ export class QuotationsController {
   }
 
   @Patch(':id/send')
-  send(@CurrentBusiness() business: AuthenticatedBusiness, @Param('id') id: string) {
+  send(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+  ) {
     return this.quotationsService.send(business.businessId, id);
   }
 
   @Patch(':id/cancel')
-  cancel(@CurrentBusiness() business: AuthenticatedBusiness, @Param('id') id: string) {
+  cancel(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+  ) {
     return this.quotationsService.cancel(business.businessId, id);
   }
 
   @Delete(':id')
-  remove(@CurrentBusiness() business: AuthenticatedBusiness, @Param('id') id: string) {
+  remove(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+  ) {
     return this.quotationsService.remove(business.businessId, id);
   }
 
   @Post(':id/convert')
-  convert(@CurrentBusiness() business: AuthenticatedBusiness, @Param('id') id: string) {
+  convert(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+  ) {
     return this.quotationsService.convertToInvoice(business.businessId, id);
   }
 
@@ -111,7 +150,7 @@ export class QuotationsController {
       ? biz.invoiceTemplateId
       : DEFAULT_DOCUMENT_TEMPLATE_ID;
     const accentColor = isCustomAccentUnlocked(tier)
-      ? biz.documentAccentColor ?? null
+      ? (biz.documentAccentColor ?? null)
       : null;
     const buffer = await this.quotationPdfService.generate(
       business.businessId,

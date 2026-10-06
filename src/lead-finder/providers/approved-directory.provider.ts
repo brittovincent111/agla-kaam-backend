@@ -36,14 +36,37 @@ export class ApprovedBusinessDirectoryProvider implements LeadSourceProvider {
     ];
 
     const areasInCity: Record<string, string[]> = {
-      Kochi: ['Edappally', 'Kaloor', 'Palarivattom', 'Aluva', 'Ernakulam South'],
-      Bengaluru: ['Indiranagar', 'Koramangala', 'Whitefield', 'HSR Layout', 'Jayanagar'],
+      Kochi: [
+        'Edappally',
+        'Kaloor',
+        'Palarivattom',
+        'Aluva',
+        'Ernakulam South',
+      ],
+      Bengaluru: [
+        'Indiranagar',
+        'Koramangala',
+        'Whitefield',
+        'HSR Layout',
+        'Jayanagar',
+      ],
       Mumbai: ['Andheri East', 'Bandra West', 'Thane', 'Borivali', 'Dadar'],
-      Delhi: ['Connaught Place', 'Lajpat Nagar', 'Rohini', 'Dwarka', 'Janakpuri'],
+      Delhi: [
+        'Connaught Place',
+        'Lajpat Nagar',
+        'Rohini',
+        'Dwarka',
+        'Janakpuri',
+      ],
       Dubai: ['Deira', 'Al Barsha', 'Business Bay', 'Karama', 'Jumeirah'],
     };
 
-    const areas = areasInCity[city] || ['Main Market', 'Industrial Area', 'Downtown', 'Sector 4'];
+    const areas = areasInCity[city] || [
+      'Main Market',
+      'Industrial Area',
+      'Downtown',
+      'Sector 4',
+    ];
 
     const items: NormalizedBusinessLead[] = [];
 
@@ -75,10 +98,10 @@ export class ApprovedBusinessDirectoryProvider implements LeadSourceProvider {
         source: this.providerId,
         sourcePlaceId: `dir_${city.toLowerCase()}_${category.toLowerCase().replace(/\s+/g, '_')}_${idx}`,
         sourceUrl: `https://directory.velocrew.in/listings/${city.toLowerCase()}/${idx}`,
-        latitude: 9.9816 + (idx * 0.002),
-        longitude: 76.2999 + (idx * 0.002),
-        rating: Number((3.8 + ((idx % 12) * 0.1)).toFixed(1)),
-        reviewCount: 5 + (idx * 7),
+        latitude: 9.9816 + idx * 0.002,
+        longitude: 76.2999 + idx * 0.002,
+        rating: Number((3.8 + (idx % 12) * 0.1).toFixed(1)),
+        reviewCount: 5 + idx * 7,
       });
     }
 

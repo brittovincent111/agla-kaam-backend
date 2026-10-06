@@ -51,11 +51,31 @@ export class AmcService {
     const activeAmcs = await this.amcModel
       .find({ businessId, status: 'active' })
       .exec();
+    // Booked on the schedule unless the owner asked to book AMC visits by hand.
+    let amcAutoBook = true;
+    if (activeAmcs.length && this.amcModel.db?.collection) {
+      // Read straight off the collection: this module has no Business model,
+      // and a missing or unreadable setting means the default (booked).
+      const biz = await this.amcModel.db
+        .collection('businesses')
+        .findOne(
+          {
+            _id: Types.ObjectId.isValid(businessId)
+              ? new Types.ObjectId(businessId)
+              : (businessId as never),
+          },
+          { projection: { amcAutoBook: 1 } },
+        )
+        .catch(() => null);
+      amcAutoBook = biz?.amcAutoBook !== false;
+    }
 
     for (const amc of activeAmcs) {
       if (!amc.visitSchedule || amc.visitSchedule.length === 0) continue;
 
-      const allPending = amc.visitSchedule.filter((v) => v.status === 'pending');
+      const allPending = amc.visitSchedule.filter(
+        (v) => v.status === 'pending',
+      );
       const currentVisit = allPending[0];
       if (!currentVisit) continue;
 
@@ -73,13 +93,17 @@ export class AmcService {
         : amc.serviceType;
 
       if (currentVisit.serviceId) {
-        const existingService = await this.serviceModel.findById(currentVisit.serviceId).exec();
+        const existingService = await this.serviceModel
+          .findById(currentVisit.serviceId)
+          .exec();
         if (existingService && existingService.status === 'pending') {
           const expectedDate = currentVisit.dueDate ?? amc.startDate;
           const needsDateFix =
             expectedDate &&
-            (existingService.serviceDate?.getTime() !== expectedDate.getTime() ||
-             existingService.nextServiceDate?.getTime() !== expectedDate.getTime());
+            (existingService.serviceDate?.getTime() !==
+              expectedDate.getTime() ||
+              existingService.nextServiceDate?.getTime() !==
+                expectedDate.getTime());
           if (needsDateFix) {
             existingService.serviceDate = expectedDate;
             // nextServiceDate must be THIS visit's due date so the Services
@@ -96,6 +120,9 @@ export class AmcService {
         customerId: amc.customerId,
         serviceType: title,
         status: 'pending',
+        // On the technician's day by default; a reminder to book when the
+        // business books AMC visits by hand (amcAutoBook: false).
+        booked: amcAutoBook,
         // The contract's own schedule decides the date, so reminders follow
         // what the customer actually bought.
         serviceDate: currentVisit.dueDate ?? amc.startDate ?? new Date(),
@@ -122,7 +149,9 @@ export class AmcService {
     const tier = await this.subscriptionsService.getActiveTier(businessId);
     const hasUnlimitedAmc = tier === 'reminders' || tier === 'combo';
     if (!hasUnlimitedAmc) {
-      const currentAmcCount = await this.amcModel.countDocuments({ businessId }).exec();
+      const currentAmcCount = await this.amcModel
+        .countDocuments({ businessId })
+        .exec();
       if (currentAmcCount >= FREE_TIER_AMC_LIMIT) {
         throw new ForbiddenException(
           `Your plan allows ${FREE_TIER_AMC_LIMIT} free AMC contracts to test AMC tracking. Upgrade to Reminders or Combo plan to create unlimited AMC contracts.`,
@@ -183,7 +212,10 @@ export class AmcService {
     return amc;
   }
 
-  async findOnePopulated(businessId: string, amcId: string): Promise<AmcDocument> {
+  async findOnePopulated(
+    businessId: string,
+    amcId: string,
+  ): Promise<AmcDocument> {
     // Materialise before reading, so the contract screen shows the same
     // state as every other screen. Completing a visit leaves the next one
     // pending with no service yet; the sync ran on the services and list
@@ -230,8 +262,15 @@ export class AmcService {
     const filter = andFilters(
       { businessId },
       options.customerId ? { customerId: idFilter(options.customerId) } : {},
-      options.status && options.status !== 'all' ? { status: options.status } : {},
-      numberOrCustomerFilter(options.search, 'contractNumber', customerIds, idsFilter),
+      options.status && options.status !== 'all'
+        ? { status: options.status }
+        : {},
+      numberOrCustomerFilter(
+        options.search,
+        'contractNumber',
+        customerIds,
+        idsFilter,
+      ),
       pageCursorFilter(cursor, 'createdAt', 'desc'),
     );
 
@@ -242,13 +281,20 @@ export class AmcService {
         .limit(limit + 1)
         .populate('customerId', 'name phone')
         .exec(),
-      cursor ? Promise.resolve(undefined) : this.amcModel.countDocuments(filter).exec(),
+      cursor
+        ? Promise.resolve(undefined)
+        : this.amcModel.countDocuments(filter).exec(),
     ]);
 
-    return buildPage(rows, limit, (row) => ({
-      v: (row as unknown as { createdAt: Date }).createdAt.toISOString(),
-      id: (row._id as { toString(): string }).toString(),
-    }), total);
+    return buildPage(
+      rows,
+      limit,
+      (row) => ({
+        v: (row as unknown as { createdAt: Date }).createdAt.toISOString(),
+        id: (row._id as { toString(): string }).toString(),
+      }),
+      total,
+    );
   }
 
   async findAllForBusiness(
@@ -272,6 +318,28 @@ export class AmcService {
       .exec();
   }
 
+  /**
+   * A contract visit moved to another day (Reschedule or Revisit later on
+   * its job). The schedule is the source of truth — syncAmcServices resets a
+   * job to its scheduled date — so the schedule has to move with it, or the
+   * visit snapped back the next time a list loaded.
+   */
+  async moveVisit(
+    businessId: string,
+    amcId: string,
+    serviceId: string,
+    date: Date,
+  ): Promise<void> {
+    const amc = await this.findOne(businessId, amcId).catch(() => null);
+    const visit = amc?.visitSchedule?.find(
+      (v) => v.serviceId?.toString() === serviceId,
+    );
+    if (!amc || !visit || visit.status !== 'pending') return;
+    visit.dueDate = date;
+    amc.markModified('visitSchedule');
+    await amc.save();
+  }
+
   async logVisit(
     businessId: string,
     amcId: string,
@@ -279,7 +347,9 @@ export class AmcService {
   ): Promise<AmcDocument> {
     const amc = await this.findOne(businessId, amcId);
     if (amc.status === 'cancelled' || amc.status === 'expired') {
-      throw new BadRequestException(`Cannot log visit for a ${amc.status} AMC contract`);
+      throw new BadRequestException(
+        `Cannot log visit for a ${amc.status} AMC contract`,
+      );
     }
 
     let visitToComplete = amc.visitSchedule?.find(
@@ -304,10 +374,7 @@ export class AmcService {
     return amc.save();
   }
 
-  async skipVisit(
-    businessId: string,
-    amcId: string,
-  ): Promise<AmcDocument> {
+  async skipVisit(businessId: string, amcId: string): Promise<AmcDocument> {
     const amc = await this.findOne(businessId, amcId);
     if (amc.status === 'cancelled' || amc.status === 'expired') {
       throw new BadRequestException(
@@ -372,7 +439,9 @@ export class AmcService {
         }
       } else {
         // Some visits already completed: remaining visits start after last completed visit date
-        const baseDate = new Date(completedList[completedList.length - 1].dueDate);
+        const baseDate = new Date(
+          completedList[completedList.length - 1].dueDate,
+        );
         const startMs = baseDate.getTime();
         const endMs = amc.endDate.getTime();
         const totalMs = Math.max(0, endMs - startMs);

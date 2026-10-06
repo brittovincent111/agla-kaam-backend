@@ -11,7 +11,9 @@ describe('amountInWords — Indian system (INR)', () => {
     expect(amountInWords(20, 'INR')).toBe('Rupees Twenty Only');
     expect(amountInWords(72, 'INR')).toBe('Rupees Seventy Two Only');
     expect(amountInWords(100, 'INR')).toBe('Rupees One Hundred Only');
-    expect(amountInWords(999, 'INR')).toBe('Rupees Nine Hundred Ninety Nine Only');
+    expect(amountInWords(999, 'INR')).toBe(
+      'Rupees Nine Hundred Ninety Nine Only',
+    );
   });
 
   it('groups as thousand / lakh / crore, not million', () => {
@@ -33,7 +35,9 @@ describe('amountInWords — Indian system (INR)', () => {
 
   it('rounds to the currency precision before spelling it out', () => {
     // Not "...Eight Hundred Ninety Nine and Paise One Hundred".
-    expect(amountInWords(1899.999, 'INR')).toBe('Rupees One Thousand Nine Hundred Only');
+    expect(amountInWords(1899.999, 'INR')).toBe(
+      'Rupees One Thousand Nine Hundred Only',
+    );
     expect(amountInWords(1899.994, 'INR')).toBe(
       'Rupees One Thousand Eight Hundred Ninety Nine and Paise Ninety Nine Only',
     );
@@ -43,15 +47,25 @@ describe('amountInWords — Indian system (INR)', () => {
 describe('amountInWords — international system', () => {
   it('groups as thousand / million / billion', () => {
     expect(amountInWords(1000000, 'USD')).toBe('Dollars One Million Only');
-    expect(amountInWords(2500000, 'AED')).toBe('Dirhams Two Million Five Hundred Thousand Only');
+    expect(amountInWords(2500000, 'AED')).toBe(
+      'Dirhams Two Million Five Hundred Thousand Only',
+    );
     expect(amountInWords(1000000000, 'USD')).toBe('Dollars One Billion Only');
   });
 
   it('uses each currency its own major and minor unit names', () => {
-    expect(amountInWords(12.34, 'USD')).toBe('Dollars Twelve and Cents Thirty Four Only');
-    expect(amountInWords(12.34, 'AED')).toBe('Dirhams Twelve and Fils Thirty Four Only');
-    expect(amountInWords(12.34, 'SAR')).toBe('Riyals Twelve and Halalas Thirty Four Only');
-    expect(amountInWords(12.34, 'GBP')).toBe('Pounds Twelve and Pence Thirty Four Only');
+    expect(amountInWords(12.34, 'USD')).toBe(
+      'Dollars Twelve and Cents Thirty Four Only',
+    );
+    expect(amountInWords(12.34, 'AED')).toBe(
+      'Dirhams Twelve and Fils Thirty Four Only',
+    );
+    expect(amountInWords(12.34, 'SAR')).toBe(
+      'Riyals Twelve and Halalas Thirty Four Only',
+    );
+    expect(amountInWords(12.34, 'GBP')).toBe(
+      'Pounds Twelve and Pence Thirty Four Only',
+    );
   });
 
   it('honours 3-decimal Gulf currencies', () => {

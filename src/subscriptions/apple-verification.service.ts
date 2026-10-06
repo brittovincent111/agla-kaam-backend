@@ -14,6 +14,7 @@ const JWT_TTL_SECONDS = 55 * 60; // Apple caps this token at 1 hour.
 // https://developer.apple.com/documentation/appstoreserverapi/jwstransactiondecodedpayload
 interface AppleTransactionInfo {
   transactionId?: string;
+  originalTransactionId?: string;
   productId?: string;
   expiresDate?: number;
   revocationDate?: number;
@@ -22,7 +23,15 @@ interface AppleTransactionInfo {
 export interface ApplePurchaseVerification {
   isActive: boolean;
   transactionId: string;
+  // Stable across every renewal of one subscription — each renewal gets a
+  // fresh transactionId, so this is the only id that ties a renewal back
+  // to the purchase (and business) it belongs to.
+  originalTransactionId?: string;
   productId: string;
+  // Refunded or revoked by Apple (revocationDate set). Unlike a plain
+  // cancellation this ends the entitlement immediately, whatever expiresAt
+  // still says.
+  revoked: boolean;
   // Apple's own expiry for the entitlement, so renewalDate reflects the
   // store rather than a locally guessed "+1 year".
   expiresAt?: Date;
@@ -67,7 +76,9 @@ export class AppleVerificationService {
       // .env files can't hold real newlines — the key is stored with
       // literal "\n" sequences and unescaped here, same convention as
       // other multi-line secrets.
-      const { importPKCS8 } = await (eval('import("jose")') as Promise<typeof import('jose')>);
+      const { importPKCS8 } = await (eval('import("jose")') as Promise<
+        typeof import('jose')
+      >);
       this.signingKeyPromise = importPKCS8(pem.replace(/\\n/g, '\n'), 'ES256');
     }
     return this.signingKeyPromise;
@@ -83,7 +94,9 @@ export class AppleVerificationService {
     }
     const key = await this.getSigningKey();
     const now = Math.floor(Date.now() / 1000);
-    const { SignJWT } = await (eval('import("jose")') as Promise<typeof import('jose')>);
+    const { SignJWT } = await (eval('import("jose")') as Promise<
+      typeof import('jose')
+    >);
     return new SignJWT({ bid: this.getBundleId() })
       .setProtectedHeader({ alg: 'ES256', kid: keyId, typ: 'JWT' })
       .setIssuer(issuerId)
@@ -105,7 +118,9 @@ export class AppleVerificationService {
 
     if (trimmed.includes('.')) {
       try {
-        const { decodeJwt } = await (eval('import("jose")') as Promise<typeof import('jose')>);
+        const { decodeJwt } = await (eval('import("jose")') as Promise<
+          typeof import('jose')
+        >);
         const payload = decodeJwt(trimmed) as AppleTransactionInfo;
         if (payload?.transactionId) {
           return payload.transactionId;
@@ -124,16 +139,16 @@ export class AppleVerificationService {
     );
   }
 
-  // Pulls the transaction id out of an App Store Server Notification V2.
+  // Pulls the transaction ids out of an App Store Server Notification V2.
   //
   // The notification's JWS signature is deliberately NOT verified here: the
   // payload is used only to learn *which* transaction changed, and the truth
   // is then fetched from Apple's own API over an authenticated request (see
   // verifyTransaction). A forged notification therefore cannot grant
   // anything — at worst it triggers a redundant lookup.
-  async extractNotificationTransactionId(
+  async extractNotificationTransaction(
     signedPayload: string,
-  ): Promise<string | null> {
+  ): Promise<{ transactionId: string; originalTransactionId?: string } | null> {
     try {
       const { decodeJwt } = await (eval('import("jose")') as Promise<
         typeof import('jose')
@@ -143,8 +158,12 @@ export class AppleVerificationService {
       };
       const signedTransactionInfo = payload?.data?.signedTransactionInfo;
       if (!signedTransactionInfo) return null;
-      const info = decodeJwt(signedTransactionInfo) as { transactionId?: string };
-      return info.transactionId ?? null;
+      const info = decodeJwt(signedTransactionInfo) as AppleTransactionInfo;
+      if (!info.transactionId) return null;
+      return {
+        transactionId: info.transactionId,
+        originalTransactionId: info.originalTransactionId,
+      };
     } catch {
       // A malformed notification is ignored rather than throwing — Apple
       // retries, and a 500 here would just invite more retries of something
@@ -190,7 +209,12 @@ export class AppleVerificationService {
       console.error(
         `[AppleVerificationService] Apple API returned ${response.status}: ${errorBody}`,
       );
-      return { isActive: false, transactionId, productId: '' };
+      return {
+        isActive: false,
+        revoked: false,
+        transactionId,
+        productId: '',
+      };
     }
     const body = (await response.json()) as { signedTransactionInfo?: string };
     if (!body.signedTransactionInfo) {
@@ -198,21 +222,31 @@ export class AppleVerificationService {
         '[AppleVerificationService] response missing signedTransactionInfo:',
         body,
       );
-      return { isActive: false, transactionId, productId: '' };
+      return {
+        isActive: false,
+        revoked: false,
+        transactionId,
+        productId: '',
+      };
     }
     // The transport itself is the trust boundary here — this response came
     // straight from Apple's own API over HTTPS in reply to our own signed
     // request, so decoding (not re-verifying) the JWS payload is enough,
     // the same trust model used for Google Play's subscriptionsv2.get.
-    const { decodeJwt } = await (eval('import("jose")') as Promise<typeof import('jose')>);
+    const { decodeJwt } = await (eval('import("jose")') as Promise<
+      typeof import('jose')
+    >);
     const info = decodeJwt(body.signedTransactionInfo) as AppleTransactionInfo;
+    const revoked = Boolean(info.revocationDate);
     const isActive =
-      !info.revocationDate &&
+      !revoked &&
       (!info.expiresDate || info.expiresDate > Date.now());
 
     return {
       isActive,
+      revoked,
       transactionId: info.transactionId ?? transactionId,
+      originalTransactionId: info.originalTransactionId,
       productId: info.productId ?? '',
       expiresAt: info.expiresDate ? new Date(info.expiresDate) : undefined,
     };

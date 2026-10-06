@@ -40,7 +40,9 @@ export function decodeCursor(raw?: string): CustomerCursor | null {
 }
 
 // Rows strictly after the cursor in (name, _id) order.
-export function cursorFilter(cursor: CustomerCursor | null): Record<string, unknown> {
+export function cursorFilter(
+  cursor: CustomerCursor | null,
+): Record<string, unknown> {
   if (!cursor) return {};
   return {
     $or: [

@@ -1,4 +1,12 @@
-import { IsDateString, IsIn, IsNumber, IsOptional, IsString, Min, MaxLength } from 'class-validator';
+import {
+  IsDateString,
+  IsIn,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Min,
+  MaxLength,
+} from 'class-validator';
 import { PAYMENT_METHODS } from '../../common/constants/invoice-options';
 
 export class RecordPaymentDto {

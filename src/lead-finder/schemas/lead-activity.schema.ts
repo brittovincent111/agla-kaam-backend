@@ -19,7 +19,12 @@ export type LeadActivityType = (typeof LEAD_ACTIVITY_TYPES)[number];
 
 @Schema({ timestamps: true })
 export class LeadActivity {
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Lead', required: true, index: true })
+  @Prop({
+    type: MongooseSchema.Types.ObjectId,
+    ref: 'Lead',
+    required: true,
+    index: true,
+  })
   leadId: Types.ObjectId;
 
   @Prop({

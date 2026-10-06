@@ -31,15 +31,12 @@ describe('IsSupportedPhoneNumber', () => {
     expect(accepts(phone)).toBe(true);
   });
 
-  it.each([
-    [''],
-    ['   '],
-    ['not-a-number'],
-    ['+1'],
-    ['12345'],
-  ])('still rejects %p', (phone) => {
-    expect(accepts(phone)).toBe(false);
-  });
+  it.each([[''], ['   '], ['not-a-number'], ['+1'], ['12345']])(
+    'still rejects %p',
+    (phone) => {
+      expect(accepts(phone)).toBe(false);
+    },
+  );
 });
 
 describe('phoneMatchPatterns', () => {

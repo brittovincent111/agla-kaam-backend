@@ -73,7 +73,8 @@ export class CreatePurchaseDto {
 
   @IsOptional()
   @IsEnum(['cash', 'bank_transfer', 'upi', 'cheque', 'credit', 'other'])
-  paymentMethod?: 'cash' | 'bank_transfer' | 'upi' | 'cheque' | 'credit' | 'other';
+  paymentMethod?:
+    'cash' | 'bank_transfer' | 'upi' | 'cheque' | 'credit' | 'other';
 
   @IsArray()
   @ValidateNested({ each: true })
@@ -84,4 +85,3 @@ export class CreatePurchaseDto {
   @IsString()
   notes?: string;
 }
-

@@ -1,7 +1,14 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { ProformaInvoice, ProformaInvoiceDocument } from './schemas/proforma-invoice.schema';
+import {
+  ProformaInvoice,
+  ProformaInvoiceDocument,
+} from './schemas/proforma-invoice.schema';
 import { CreateProformaInvoiceDto } from './dto/create-proforma-invoice.dto';
 import { UpdateProformaInvoiceDto } from './dto/update-proforma-invoice.dto';
 import { BusinessesService } from '../businesses/businesses.service';
@@ -33,15 +40,24 @@ export class ProformaInvoicesService {
     private readonly customersService: CustomersService,
   ) {}
 
-  async create(businessId: string, dto: CreateProformaInvoiceDto): Promise<ProformaInvoiceDocument> {
+  async create(
+    businessId: string,
+    dto: CreateProformaInvoiceDto,
+  ): Promise<ProformaInvoiceDocument> {
     const business = await this.businessesService.findById(businessId);
     const prefix = business?.proformaPrefix || 'PI-';
-    const serial = business?.proformaNextSerial || (await this.proformaModel.countDocuments({ businessId: new Types.ObjectId(businessId) })) + 1;
+    const serial =
+      business?.proformaNextSerial ||
+      (await this.proformaModel.countDocuments({
+        businessId: new Types.ObjectId(businessId),
+      })) + 1;
 
     const proformaNumber = `${prefix}${new Date().getFullYear()}-${String(serial).padStart(3, '0')}`;
 
     // Auto-increment serial counter on Business
-    await this.businessesService.update(businessId, { proformaNextSerial: serial + 1 });
+    await this.businessesService.update(businessId, {
+      proformaNextSerial: serial + 1,
+    });
 
     const discount = dto.discount || 0;
     const totals = calculateInvoiceTotals(dto.items, discount);
@@ -52,7 +68,9 @@ export class ProformaInvoicesService {
       const taxAmount = lineSubtotal * (taxRate / 100);
       const amount = lineSubtotal + taxAmount;
       return {
-        serviceId: item.serviceId ? new Types.ObjectId(item.serviceId) : undefined,
+        serviceId: item.serviceId
+          ? new Types.ObjectId(item.serviceId)
+          : undefined,
         name: item.name.trim(),
         description: item.description?.trim(),
         hsnCode: item.hsnCode?.trim().toUpperCase(),
@@ -118,8 +136,15 @@ export class ProformaInvoicesService {
       // idFilter matches either form.
       { businessId: idFilter(businessId) },
       options.customerId ? { customerId: idFilter(options.customerId) } : {},
-      options.status && options.status !== 'all' ? { status: options.status } : {},
-      numberOrCustomerFilter(options.search, 'proformaNumber', customerIds, idsFilter),
+      options.status && options.status !== 'all'
+        ? { status: options.status }
+        : {},
+      numberOrCustomerFilter(
+        options.search,
+        'proformaNumber',
+        customerIds,
+        idsFilter,
+      ),
       pageCursorFilter(cursor, 'createdAt', 'desc'),
     );
 
@@ -130,13 +155,20 @@ export class ProformaInvoicesService {
         .limit(limit + 1)
         .populate('customerId', 'name phone')
         .exec(),
-      cursor ? Promise.resolve(undefined) : this.proformaModel.countDocuments(filter).exec(),
+      cursor
+        ? Promise.resolve(undefined)
+        : this.proformaModel.countDocuments(filter).exec(),
     ]);
 
-    return buildPage(rows, limit, (row) => ({
-      v: (row as unknown as { createdAt: Date }).createdAt.toISOString(),
-      id: (row._id as { toString(): string }).toString(),
-    }), total);
+    return buildPage(
+      rows,
+      limit,
+      (row) => ({
+        v: (row as unknown as { createdAt: Date }).createdAt.toISOString(),
+        id: (row._id as { toString(): string }).toString(),
+      }),
+      total,
+    );
   }
 
   async findAll(businessId: string): Promise<ProformaInvoiceDocument[]> {
@@ -147,9 +179,15 @@ export class ProformaInvoicesService {
       .exec();
   }
 
-  async findOne(businessId: string, id: string): Promise<ProformaInvoiceDocument> {
+  async findOne(
+    businessId: string,
+    id: string,
+  ): Promise<ProformaInvoiceDocument> {
     const doc = await this.proformaModel
-      .findOne({ _id: new Types.ObjectId(id), businessId: new Types.ObjectId(businessId) })
+      .findOne({
+        _id: new Types.ObjectId(id),
+        businessId: new Types.ObjectId(businessId),
+      })
       .populate('customerId')
       .exec();
 
@@ -157,7 +195,11 @@ export class ProformaInvoicesService {
     return doc;
   }
 
-  async update(businessId: string, id: string, dto: UpdateProformaInvoiceDto): Promise<ProformaInvoiceDocument> {
+  async update(
+    businessId: string,
+    id: string,
+    dto: UpdateProformaInvoiceDto,
+  ): Promise<ProformaInvoiceDocument> {
     const existing = await this.findOne(businessId, id);
     if (existing.status === 'converted') {
       throw new BadRequestException('Cannot edit a converted Proforma Invoice');
@@ -179,7 +221,9 @@ export class ProformaInvoicesService {
         const taxAmount = lineSubtotal * (taxRate / 100);
         const amount = lineSubtotal + taxAmount;
         return {
-          serviceId: item.serviceId ? new Types.ObjectId(item.serviceId) : undefined,
+          serviceId: item.serviceId
+            ? new Types.ObjectId(item.serviceId)
+            : undefined,
           name: item.name.trim(),
           description: item.description?.trim(),
           hsnCode: item.hsnCode?.trim().toUpperCase(),
@@ -194,19 +238,32 @@ export class ProformaInvoicesService {
 
     const updated = await this.proformaModel
       .findOneAndUpdate(
-        { _id: new Types.ObjectId(id), businessId: new Types.ObjectId(businessId) },
+        {
+          _id: new Types.ObjectId(id),
+          businessId: new Types.ObjectId(businessId),
+        },
         {
           $set: {
-            proformaDate: dto.proformaDate ? new Date(dto.proformaDate) : existing.proformaDate,
-            validUntil: dto.validUntil ? new Date(dto.validUntil) : existing.validUntil,
+            proformaDate: dto.proformaDate
+              ? new Date(dto.proformaDate)
+              : existing.proformaDate,
+            validUntil: dto.validUntil
+              ? new Date(dto.validUntil)
+              : existing.validUntil,
             items,
             subtotal: totals.subtotal,
             discount: totals.discount,
             taxTotal: totals.taxTotal,
             total: totals.total,
             notes: dto.notes !== undefined ? dto.notes?.trim() : existing.notes,
-            paymentTerms: dto.paymentTerms !== undefined ? dto.paymentTerms?.trim() : existing.paymentTerms,
-            termsAndConditions: dto.termsAndConditions !== undefined ? dto.termsAndConditions?.trim() : existing.termsAndConditions,
+            paymentTerms:
+              dto.paymentTerms !== undefined
+                ? dto.paymentTerms?.trim()
+                : existing.paymentTerms,
+            termsAndConditions:
+              dto.termsAndConditions !== undefined
+                ? dto.termsAndConditions?.trim()
+                : existing.termsAndConditions,
           },
         },
         { new: true },
@@ -223,16 +280,38 @@ export class ProformaInvoicesService {
       _id: new Types.ObjectId(id),
       businessId: new Types.ObjectId(businessId),
     });
-    if (res.deletedCount === 0) throw new NotFoundException('Proforma Invoice not found');
+    if (res.deletedCount === 0)
+      throw new NotFoundException('Proforma Invoice not found');
+  }
+
+  // The app's "Save & send" has always called this route, but it did not
+  // exist, so every proforma send 404'd after the save had gone through and
+  // was reported as "Could not save".
+  async send(businessId: string, id: string) {
+    const proforma = await this.findOne(businessId, id);
+    if (proforma.status !== 'draft') {
+      throw new BadRequestException('Only draft Proforma Invoices can be sent');
+    }
+    if (proforma.items.length === 0) {
+      throw new BadRequestException(
+        'Add at least one item before sending a Proforma Invoice',
+      );
+    }
+    proforma.status = 'sent';
+    return proforma.save();
   }
 
   async convertToTaxInvoice(businessId: string, id: string): Promise<any> {
     const proforma = await this.findOne(businessId, id);
     if (proforma.status === 'converted') {
-      throw new BadRequestException('This Proforma Invoice has already been converted');
+      throw new BadRequestException(
+        'This Proforma Invoice has already been converted',
+      );
     }
 
-    const customerIdStr = (proforma.customerId as any)?._id?.toString() || proforma.customerId.toString();
+    const customerIdStr =
+      (proforma.customerId as any)?._id?.toString() ||
+      proforma.customerId.toString();
 
     // Create final Tax Invoice using InvoicingService
     const invoice = await this.invoicingService.create(businessId, {
@@ -240,13 +319,18 @@ export class ProformaInvoicesService {
       invoiceDate: new Date().toISOString(),
       dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
       paymentTerms: proforma.paymentTerms,
-      notes: proforma.notes ? `Converted from ${proforma.proformaNumber}. ${proforma.notes}` : `Converted from ${proforma.proformaNumber}`,
+      notes: proforma.notes
+        ? `Converted from ${proforma.proformaNumber}. ${proforma.notes}`
+        : `Converted from ${proforma.proformaNumber}`,
       termsAndConditions: proforma.termsAndConditions,
       discount: proforma.discount,
       items: proforma.items.map((i) => ({
-        serviceId: (i.serviceId as any)?._id?.toString() || i.serviceId?.toString(),
+        serviceId:
+          (i.serviceId as any)?._id?.toString() || i.serviceId?.toString(),
         name: i.name,
         description: i.description,
+        // Carried over, or the tax invoice lost every HSN/SAC the proforma had.
+        hsnCode: i.hsnCode,
         quantity: i.quantity,
         rate: i.rate,
         taxRate: i.taxRate,

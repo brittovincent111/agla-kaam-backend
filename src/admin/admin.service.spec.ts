@@ -30,9 +30,11 @@ describe('AdminService', () => {
 
   const mockSubscriptionModel = {
     find: jest.fn().mockReturnValue({
-      exec: jest.fn().mockResolvedValue([
-        { tier: 'combo', teamEnabled: false, status: 'active' },
-      ]),
+      exec: jest
+        .fn()
+        .mockResolvedValue([
+          { tier: 'combo', teamEnabled: false, status: 'active' },
+        ]),
     }),
   };
 
@@ -80,11 +82,17 @@ describe('AdminService', () => {
         { provide: ConfigService, useValue: mockConfigService },
         { provide: JwtService, useValue: mockJwtService },
         { provide: getModelToken(Business.name), useValue: mockBusinessModel },
-        { provide: getModelToken(Subscription.name), useValue: mockSubscriptionModel },
+        {
+          provide: getModelToken(Subscription.name),
+          useValue: mockSubscriptionModel,
+        },
         { provide: getModelToken(Customer.name), useValue: mockCustomerModel },
         { provide: getModelToken(Service.name), useValue: mockServiceModel },
         { provide: getModelToken(Invoice.name), useValue: mockInvoiceModel },
-        { provide: getModelToken(AppFeedback.name), useValue: mockFeedbackModel },
+        {
+          provide: getModelToken(AppFeedback.name),
+          useValue: mockFeedbackModel,
+        },
       ],
     }).compile();
 

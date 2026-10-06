@@ -1,17 +1,19 @@
+import { Transform } from 'class-transformer';
 import {
   IsEmail,
   IsString,
-  Length,
+  Matches,
   MaxLength,
   MinLength,
 } from 'class-validator';
 
 export class ResetPasswordDto {
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsEmail()
   email: string;
 
   @IsString()
-  @Length(6, 6)
+  @Matches(/^\d{6}$/, { message: 'Enter the 6-digit code from the email.' })
   code: string;
 
   @IsString()

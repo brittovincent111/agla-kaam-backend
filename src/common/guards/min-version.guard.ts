@@ -8,7 +8,10 @@ import {
 // Nest's HttpStatus enum has no 426 entry.
 const UPGRADE_REQUIRED = 426;
 import type { Request } from 'express';
-import { AppVersionService, Platform } from '../../app-version/app-version.service';
+import {
+  AppVersionService,
+  Platform,
+} from '../../app-version/app-version.service';
 
 /**
  * Refuses requests from app builds below the configured floor.
@@ -58,7 +61,8 @@ export class MinVersionGuard implements CanActivate {
         {
           statusCode: UPGRADE_REQUIRED,
           error: 'Upgrade Required',
-          message: 'This version of the app is no longer supported. Please update.',
+          message:
+            'This version of the app is no longer supported. Please update.',
         },
         UPGRADE_REQUIRED,
       );

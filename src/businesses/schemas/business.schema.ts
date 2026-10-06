@@ -18,6 +18,8 @@ function stripPasswordHash(_doc: unknown, ret: Record<string, unknown>) {
   delete ret.passwordHash;
   delete ret.passwordResetCodeHash;
   delete ret.passwordResetExpiresAt;
+  delete ret.passwordResetAttempts;
+  delete ret.appleRefreshToken;
   return ret;
 }
 
@@ -46,6 +48,13 @@ export class Business {
   })
   subscriptionStatus: SubscriptionStatus;
 
+  // Technician seats granted by the Agla Kaam team for this company (e.g. a
+  // bigger team paid for directly). Applies while Team is active; the
+  // company gets the higher of this and the standard TEAM_SEAT_LIMIT. Kept
+  // on the business, not the subscription, so renewals don't reset it.
+  @Prop({ min: 0, max: 500 })
+  teamSeatLimit?: number;
+
   @Prop({ default: 'en' })
   language: string;
 
@@ -62,6 +71,19 @@ export class Business {
   })
   email?: string;
 
+  // Whether `email` has been proved to belong to this account's owner: an
+  // emailed signup code, Google/Apple saying so, or a password reset by
+  // emailed code. Google/Apple sign-in only links to an existing account by
+  // email when this is true — `email` itself is editable from the profile
+  // with no proof, so matching on it alone let anyone who typed someone
+  // else's address into their profile take over that person's Google/Apple
+  // sign-in. Any change of email through the profile sets it to false.
+  // Missing (accounts from before this field) counts as verified: until now
+  // every address was set at a verified sign-up, so no deploy-day backfill
+  // is needed for returning users to keep their Google/Apple sign-in.
+  @Prop()
+  emailVerified?: boolean;
+
   // Only set for email/password accounts. select:false so it's never
   // returned by a normal query — AuthService explicitly selects it to check
   // a login attempt.
@@ -77,6 +99,10 @@ export class Business {
   @Prop({ select: false })
   passwordResetExpiresAt?: Date;
 
+  // Wrong reset codes tried since the last code was sent.
+  @Prop({ select: false, default: 0 })
+  passwordResetAttempts?: number;
+
   // Google's stable per-user subject id ('sub' claim on the verified ID
   // token) — set only for accounts that have signed in with Google.
   @Prop({ unique: true, sparse: true, index: true })
@@ -88,6 +114,12 @@ export class Business {
   @Prop({ unique: true, sparse: true, index: true })
   appleId?: string;
 
+  // Long-lived Sign in with Apple refresh token, from exchanging the
+  // authorization code at sign-in. Kept only so account deletion can revoke
+  // the app's access at Apple, which App Store review requires.
+  @Prop({ select: false })
+  appleRefreshToken?: string;
+
   @Prop({ required: true, default: 'IN', uppercase: true, trim: true })
   country: string;
 
@@ -97,7 +129,11 @@ export class Business {
   @Prop({ required: true, default: 'Asia/Kolkata', trim: true })
   timezone: string;
 
-  @Prop({ required: true, default: 'gst', enum: ['gst', 'vat', 'sales_tax', 'none'] })
+  @Prop({
+    required: true,
+    default: 'gst',
+    enum: ['gst', 'vat', 'sales_tax', 'none'],
+  })
   taxType: string;
 
   @Prop({ trim: true, uppercase: true })
@@ -137,6 +173,11 @@ export class Business {
   // Overrides DEFAULT_PAYMENT_REMINDER_TEMPLATE for the invoice chase.
   @Prop({ trim: true, maxlength: 2000 })
   paymentReminderTemplate?: string;
+
+  // The business's own "service due" wording, used for every service type
+  // that has no message of its own in Service Presets.
+  @Prop({ trim: true, maxlength: 2000 })
+  reminderTemplate?: string;
 
   @Prop({ trim: true, maxlength: 2000 })
   defaultQuotationTerms?: string;
@@ -185,6 +226,12 @@ export class Business {
   // appended to completed service card records shared on WhatsApp.
   @Prop({ trim: true, maxlength: 500 })
   googleReviewUrl?: string;
+
+  // AMC visits go straight onto the technician's day on their scheduled
+  // date (booked) unless this is false — then each is a reminder the owner
+  // books after calling. Contract customers usually expect the visit.
+  @Prop()
+  amcAutoBook?: boolean;
 
   // S3 object key holding the actual image bytes (bucket: S3_BUCKET env) —
   // select:false so a normal /businesses/me fetch never needs these; the
@@ -254,10 +301,17 @@ export class Business {
   @Prop({ default: false })
   quotationShowShippingAddress?: boolean;
 
-  @Prop({ trim: true, default: 'Dear Sir/Mam,\nThank you for your valuable inquiry. We are pleased to quote as below:' })
+  @Prop({
+    trim: true,
+    default:
+      'Dear Sir/Mam,\nThank you for your valuable inquiry. We are pleased to quote as below:',
+  })
   quotationTopMessage?: string;
 
-  @Prop({ trim: true, default: 'We hope you find our offer to be in line with your requirement.' })
+  @Prop({
+    trim: true,
+    default: 'We hope you find our offer to be in line with your requirement.',
+  })
   quotationBottomMessage?: string;
 
   @Prop({ default: true })
@@ -285,10 +339,18 @@ export class Business {
   @Prop({ default: true })
   purchaseShowHsn?: boolean;
 
-  @Prop({ trim: true, default: 'Dear Sir/Mam,\nWe are pleased to submit the purchase order as below.' })
+  @Prop({
+    trim: true,
+    default:
+      'Dear Sir/Mam,\nWe are pleased to submit the purchase order as below.',
+  })
   purchaseTopMessage?: string;
 
-  @Prop({ trim: true, default: 'Your prompt attention to this order is greatly appreciated, and we look forward to a successful transaction.' })
+  @Prop({
+    trim: true,
+    default:
+      'Your prompt attention to this order is greatly appreciated, and we look forward to a successful transaction.',
+  })
   purchaseBottomMessage?: string;
 
   @Prop({ default: true })

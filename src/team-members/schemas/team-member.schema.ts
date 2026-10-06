@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
+import { isPhoneOnlyEmail } from '../../common/utils/login-phone';
 
 export type TeamMemberDocument = HydratedDocument<TeamMember>;
 
@@ -7,8 +8,13 @@ export type TeamMemberDocument = HydratedDocument<TeamMember>;
 // that was just created (or explicitly .select('+passwordHash')'d for a
 // login check) still holds it in memory — this transform is what actually
 // guarantees it never reaches a JSON response, on every serialization path.
+//
+// It also blanks the stand-in email of a member added by phone alone, so the
+// app never shows (or offers to email) an address that does not exist.
 function stripPasswordHash(_doc: unknown, ret: Record<string, unknown>) {
   delete ret.passwordHash;
+  delete ret.appleRefreshToken;
+  if (isPhoneOnlyEmail(ret.email as string | undefined)) ret.email = '';
   return ret;
 }
 
@@ -41,6 +47,19 @@ export class TeamMember {
   @Prop({ required: true, select: false })
   passwordHash: string;
 
+  // "Forgot password" for a technician, same as for an owner: a hashed
+  // 6-digit code and its expiry. Lets a technician set their own password,
+  // so the owner never has to send one over WhatsApp.
+  @Prop({ select: false })
+  passwordResetCodeHash?: string;
+
+  @Prop({ select: false })
+  passwordResetExpiresAt?: Date;
+
+  // Wrong reset codes tried since the last code was sent.
+  @Prop({ select: false, default: 0 })
+  passwordResetAttempts?: number;
+
   // A technician is created by their owner with an email and password, but the
   // login screen offers Google/Apple alongside those fields and they will tap
   // them. Storing the provider id lets AuthService recognise the technician on
@@ -52,11 +71,23 @@ export class TeamMember {
   @Prop({ unique: true, sparse: true, index: true })
   appleId?: string;
 
+  // Same as Business.appleRefreshToken — revoked at Apple when the business
+  // (and with it this login) is deleted.
+  @Prop({ select: false })
+  appleRefreshToken?: string;
+
   @Prop({ default: true })
   active: boolean;
 
   @Prop({ trim: true })
   phone?: string;
+
+  // The phone number as a login: digits with country code (see
+  // loginPhoneDigits). Globally unique like email, and a separate field so
+  // the existing email index did not have to change. Absent on members
+  // added before phone login — AuthService falls back to `phone` for them.
+  @Prop({ unique: true, sparse: true, index: true })
+  loginPhone?: string;
 
   @Prop({ trim: true })
   specialty?: string;

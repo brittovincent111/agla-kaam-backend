@@ -35,6 +35,11 @@ export class QueryLeadsDto {
   @IsString()
   state?: string;
 
+  // Searched locality; "-" means leads found by a whole-city search.
+  @IsOptional()
+  @IsString()
+  area?: string;
+
   @IsOptional()
   @IsString()
   country?: string;
@@ -50,6 +55,10 @@ export class QueryLeadsDto {
   @IsOptional()
   @IsString()
   hasWebsite?: 'true' | 'false';
+
+  @IsOptional()
+  @IsString()
+  hasEmail?: 'true' | 'false';
 
   @IsOptional()
   @IsString()

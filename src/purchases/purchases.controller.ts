@@ -13,6 +13,8 @@ import { Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { PurchasesService } from './purchases.service';
 import { CreatePurchaseDto } from './dto/create-purchase.dto';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import {
   AuthenticatedBusiness,
@@ -30,7 +32,10 @@ import {
 } from '../common/pdf/document-templates';
 
 @Controller('purchases')
-@UseGuards(JwtAuthGuard)
+// Owner-only: supplier debts, cost prices and recording payouts are all
+// money the technician is not supposed to see, let alone move.
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('owner')
 export class PurchasesController {
   constructor(
     private readonly purchasesService: PurchasesService,
@@ -77,7 +82,7 @@ export class PurchasesController {
       ? biz.invoiceTemplateId
       : DEFAULT_DOCUMENT_TEMPLATE_ID;
     const accentColor = isCustomAccentUnlocked(tier)
-      ? biz.documentAccentColor ?? null
+      ? (biz.documentAccentColor ?? null)
       : null;
     const buffer = await this.purchasePdfService.generate(
       business.businessId,
@@ -114,7 +119,10 @@ export class PurchasesController {
     @CurrentBusiness() business: AuthenticatedBusiness,
     @Query() query: ListPurchasesDto,
   ) {
-    return this.purchasesService.findPageForBusiness(business.businessId, query);
+    return this.purchasesService.findPageForBusiness(
+      business.businessId,
+      query,
+    );
   }
 
   @Get()

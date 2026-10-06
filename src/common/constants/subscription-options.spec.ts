@@ -21,7 +21,8 @@ describe('getAppStorePricing', () => {
       it(`${label}: nets at least the web price after the store's ${APP_STORE_COMMISSION_RATE * 100}% cut`, () => {
         const web = getPlanPricing(tier, teamEnabled, currency);
         const store = getAppStorePricing(tier, teamEnabled, currency);
-        const netAfterCommission = store.amount * (1 - APP_STORE_COMMISSION_RATE);
+        const netAfterCommission =
+          store.amount * (1 - APP_STORE_COMMISSION_RATE);
         // Rounding up must never undershoot — a store product priced so the
         // net is even one unit short of the web price is the exact bug this
         // table exists to avoid.
@@ -46,7 +47,8 @@ describe('getAppStorePricing', () => {
       for (const { tier, teamEnabled } of CASES) {
         const web = getPlanPricing(tier, teamEnabled, currency);
         const store = getAppStorePricing(tier, teamEnabled, currency);
-        const netAfterCommission = store.amount * (1 - APP_STORE_COMMISSION_RATE);
+        const netAfterCommission =
+          store.amount * (1 - APP_STORE_COMMISSION_RATE);
         expect(netAfterCommission).toBeLessThan(web.amount * 1.2);
       }
     }

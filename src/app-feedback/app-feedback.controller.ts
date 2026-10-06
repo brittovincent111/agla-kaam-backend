@@ -1,5 +1,8 @@
 import { Body, Controller, Post, UseGuards } from '@nestjs/common';
-import { CurrentBusiness, AuthenticatedBusiness } from '../common/decorators/current-business.decorator';
+import {
+  CurrentBusiness,
+  AuthenticatedBusiness,
+} from '../common/decorators/current-business.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CreateAppFeedbackDto } from './dto/create-app-feedback.dto';
 import { AppFeedbackService } from './app-feedback.service';

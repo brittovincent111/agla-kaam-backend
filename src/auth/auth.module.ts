@@ -8,6 +8,7 @@ import { ServicePresetsModule } from '../service-presets/service-presets.module'
 import { TeamMembersModule } from '../team-members/team-members.module';
 import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
 import { EmailService } from '../common/email/email.service';
+import { AppleSignInService } from '../common/apple/apple-sign-in.service';
 
 @Module({
   imports: [
@@ -20,7 +21,6 @@ import { EmailService } from '../common/email/email.service';
     SubscriptionsModule,
   ],
   controllers: [AuthController],
-  providers: [AuthService, EmailService],
+  providers: [AuthService, EmailService, AppleSignInService],
 })
 export class AuthModule {}
-

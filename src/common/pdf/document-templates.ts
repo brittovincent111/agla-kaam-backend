@@ -1,9 +1,8 @@
-import { SubscriptionTier, tierHasInvoicing } from '../constants/subscription-options';
 import {
-  DocumentPalette,
-  buildPalette,
-  normalizeHex,
-} from './document-colors';
+  SubscriptionTier,
+  tierHasInvoicing,
+} from '../constants/subscription-options';
+import { DocumentPalette, buildPalette, normalizeHex } from './document-colors';
 
 // Shared by invoice and quotation PDFs (and their in-app preview) — one
 // template choice applies to both document types for a business.
@@ -13,7 +12,17 @@ import {
 // `invoiceTemplateId` keeps working with no migration — but what each one
 // now selects is a structurally different document (see DocumentLayoutId),
 // and the colour is a separate, independently chosen accent.
-export const DOCUMENT_TEMPLATE_IDS = ['classic', 'modern', 'minimal', 'bold', 'compact'] as const;
+// 'premium' is new and paid-only (every id but the default is — see
+// isDocumentTemplateUnlocked). Listed second so the picker shows it right
+// after the free one.
+export const DOCUMENT_TEMPLATE_IDS = [
+  'classic',
+  'premium',
+  'modern',
+  'minimal',
+  'bold',
+  'compact',
+] as const;
 export type DocumentTemplateId = (typeof DOCUMENT_TEMPLATE_IDS)[number];
 
 export const DEFAULT_DOCUMENT_TEMPLATE_ID: DocumentTemplateId = 'classic';
@@ -28,6 +37,7 @@ export const DOCUMENT_LAYOUT_IDS = [
   'letterhead',
   'formal',
   'dense',
+  'showcase',
 ] as const;
 export type DocumentLayoutId = (typeof DOCUMENT_LAYOUT_IDS)[number];
 
@@ -62,7 +72,10 @@ interface DocumentTemplateDefinition {
   fontScale: number;
 }
 
-const TEMPLATE_DEFINITIONS: Record<DocumentTemplateId, DocumentTemplateDefinition> = {
+const TEMPLATE_DEFINITIONS: Record<
+  DocumentTemplateId,
+  DocumentTemplateDefinition
+> = {
   classic: {
     id: 'classic',
     name: 'Classic',
@@ -70,6 +83,15 @@ const TEMPLATE_DEFINITIONS: Record<DocumentTemplateId, DocumentTemplateDefinitio
       'The reliable everyday invoice. Colour header, billing details side by side, numbered item table, and payment details next to the totals. Free on every plan.',
     layout: 'banded',
     defaultAccent: '#0F6E56',
+    fontScale: 1,
+  },
+  premium: {
+    id: 'premium',
+    name: 'Prestige',
+    description:
+      'A full-colour header with your logo, Bill From and Bill To boxes, a bordered item table with a totals row, amount in words, a bold grand-total bar and a tax summary. The invoice that makes a small business look established.',
+    layout: 'showcase',
+    defaultAccent: '#1E3A6E',
     fontScale: 1,
   },
   modern: {
@@ -110,7 +132,9 @@ const TEMPLATE_DEFINITIONS: Record<DocumentTemplateId, DocumentTemplateDefinitio
   },
 };
 
-function definitionFor(templateId: DocumentTemplateId | undefined | null): DocumentTemplateDefinition {
+function definitionFor(
+  templateId: DocumentTemplateId | undefined | null,
+): DocumentTemplateDefinition {
   return (
     TEMPLATE_DEFINITIONS[templateId as DocumentTemplateId] ??
     TEMPLATE_DEFINITIONS[DEFAULT_DOCUMENT_TEMPLATE_ID]

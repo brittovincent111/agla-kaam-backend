@@ -61,7 +61,9 @@ export class DocumentTemplatesController {
     // A business that has downgraded keeps its stored accent, but it stops
     // applying — both here and in the PDF (see effectiveAccent below), so the
     // picker never shows a colour the customer's invoice won't actually use.
-    const activeAccent = accentUnlocked ? biz.documentAccentColor ?? null : null;
+    const activeAccent = accentUnlocked
+      ? (biz.documentAccentColor ?? null)
+      : null;
     return {
       activeTemplateId: biz.invoiceTemplateId ?? DEFAULT_DOCUMENT_TEMPLATE_ID,
       activeAccent,

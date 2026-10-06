@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -37,6 +38,58 @@ export class TeamMembersController {
   @Get()
   findAll(@CurrentBusiness() business: AuthenticatedBusiness) {
     return this.teamMembersService.findAllForBusiness(business.businessId);
+  }
+
+  // Seats used and available, for "3 of 4 seats used". Before ':id' routes.
+  @Get('seats')
+  seats(@CurrentBusiness() business: AuthenticatedBusiness) {
+    return this.teamMembersService.seatInfo(business.businessId);
+  }
+
+  // Declared before ':id' routes so "cash" is not read as an id.
+  @Get('cash')
+  cashSummary(@CurrentBusiness() business: AuthenticatedBusiness) {
+    return this.teamMembersService.cashSummary(business.businessId);
+  }
+
+  @Get(':id/cash')
+  memberCash(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+  ) {
+    return this.teamMembersService.memberCash(business.businessId, id);
+  }
+
+  @Post(':id/settle-cash')
+  settleCash(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+  ) {
+    return this.teamMembersService.settleCash(business.businessId, id);
+  }
+
+  // Days worked, from the jobs they completed: ?month=2026-09.
+  @Get(':id/work-log')
+  workLog(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+    @Query('month') month?: string,
+  ) {
+    return this.teamMembersService.workLog(business.businessId, id, month);
+  }
+
+  // Their open jobs and customers to another technician, or to nobody.
+  @Post(':id/hand-over')
+  handOver(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+    @Body() body: { toMemberId?: string | null },
+  ) {
+    return this.teamMembersService.handOver(
+      business.businessId,
+      id,
+      body?.toMemberId ?? null,
+    );
   }
 
   @Get(':id/tasks')

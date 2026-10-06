@@ -22,6 +22,9 @@ import { QueryLeadsDto } from './dto/query-leads.dto';
 import { UpdateLeadDto } from './dto/update-lead.dto';
 import { CreateLeadActivityDto } from './dto/create-lead-activity.dto';
 import { CreateLeadScheduleDto } from './dto/create-lead-schedule.dto';
+import { RunEmailFinderDto } from './dto/run-email-finder.dto';
+import { EmailFinderService } from './email-finder.service';
+import { LeadInstallSyncService } from './lead-install-sync.service';
 
 @Controller(['admin/lead-finder', 'admin'])
 @UseGuards(AdminAuthGuard)
@@ -31,6 +34,8 @@ export class LeadFinderController {
     private readonly searchJobService: LeadSearchJobService,
     private readonly scheduleService: LeadScheduleService,
     private readonly providerRegistry: LeadProviderRegistry,
+    private readonly emailFinder: EmailFinderService,
+    private readonly installSync: LeadInstallSyncService,
   ) {}
 
   // 1. Search Jobs
@@ -81,10 +86,7 @@ export class LeadFinderController {
   }
 
   @Patch('leads/:id')
-  async updateLead(
-    @Param('id') id: string,
-    @Body() dto: UpdateLeadDto,
-  ) {
+  async updateLead(@Param('id') id: string, @Body() dto: UpdateLeadDto) {
     return this.leadFinderService.updateLead(id, dto);
   }
 
@@ -108,10 +110,7 @@ export class LeadFinderController {
   }
 
   @Patch(['schedules/:id', 'lead-schedules/:id'])
-  async updateSchedule(
-    @Param('id') id: string,
-    @Body() updates: any,
-  ) {
+  async updateSchedule(@Param('id') id: string, @Body() updates: any) {
     return this.scheduleService.updateSchedule(id, updates);
   }
 
@@ -134,6 +133,35 @@ export class LeadFinderController {
   @Get(['analytics', 'lead-analytics'])
   async getAnalytics() {
     return this.leadFinderService.getAnalytics();
+  }
+
+  // Emails read off leads' own websites.
+  @Get('email-finder')
+  async emailFinderStatus(@Query('city') city?: string, @Query('area') area?: string) {
+    return this.emailFinder.status(city, area);
+  }
+
+  @Post('email-finder/run')
+  @HttpCode(202)
+  async runEmailFinder(@Body() dto: RunEmailFinderDto) {
+    return this.emailFinder.start(dto);
+  }
+
+  // Leads who already have an Agla Kaam account → Installed.
+  @Post('installed/sync')
+  @HttpCode(200)
+  async syncInstalled() {
+    return this.installSync.sync();
+  }
+
+  @Get('trades')
+  async getTrades(@Query('city') city?: string) {
+    return this.leadFinderService.getTrades(city);
+  }
+
+  @Get('localities')
+  async getLocalities(@Query('city') city?: string, @Query('category') category?: string) {
+    return this.leadFinderService.getLocalities(city, category);
   }
 
   @Get(['providers', 'lead-providers'])

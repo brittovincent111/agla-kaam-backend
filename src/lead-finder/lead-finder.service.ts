@@ -5,8 +5,13 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 type FilterQuery<T = any> = Record<string, any>;
 import { Lead, LeadDocument } from './schemas/lead.schema';
+import {
+  LeadSearchJob,
+  LeadSearchJobDocument,
+} from './schemas/lead-search-job.schema';
 import {
   LeadActivity,
   LeadActivityDocument,
@@ -23,6 +28,8 @@ export class LeadFinderService {
     private readonly leadModel: Model<LeadDocument>,
     @InjectModel(LeadActivity.name)
     private readonly activityModel: Model<LeadActivityDocument>,
+    @InjectModel(LeadSearchJob.name)
+    private readonly jobModel: Model<LeadSearchJobDocument>,
     private readonly usageService: ProviderUsageService,
   ) {}
 
@@ -39,6 +46,12 @@ export class LeadFinderService {
     if (dto.category) filter.category = dto.category;
     if (dto.city) filter.city = new RegExp(`^${dto.city.trim()}$`, 'i');
     if (dto.state) filter.state = new RegExp(`^${dto.state.trim()}$`, 'i');
+    if (dto.area !== undefined && dto.area !== '') {
+      filter.area =
+        dto.area === '-'
+          ? { $in: [null, ''] }
+          : new RegExp(`^${dto.area.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+    }
     if (dto.country) filter.country = dto.country;
     if (dto.source) filter.source = dto.source;
 
@@ -48,11 +61,15 @@ export class LeadFinderService {
     if (dto.hasWebsite === 'true') filter.website = { $exists: true, $ne: '' };
     if (dto.hasWebsite === 'false') filter.website = { $in: [null, ''] };
 
+    if (dto.hasEmail === 'true') filter.email = { $exists: true, $ne: '' };
+    if (dto.hasEmail === 'false') filter.email = { $in: [null, ''] };
+
     if (dto.search && dto.search.trim()) {
       const s = dto.search.trim();
       const regex = new RegExp(s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
       filter.$or = [
         { businessName: regex },
+        { email: regex },
         { phone: regex },
         { phoneNormalized: regex },
         { city: regex },
@@ -306,9 +323,12 @@ export class LeadFinderService {
     const invalidCount = counts['INVALID'] || 0;
     const doNotContactCount = counts['DO_NOT_CONTACT'] || 0;
 
-    const contactToReply = contactedCount > 0 ? (repliedCount / contactedCount) * 100 : 0;
-    const replyToInterested = repliedCount > 0 ? (interestedCount / repliedCount) * 100 : 0;
-    const interestedToInstalled = interestedCount > 0 ? (installedCount / interestedCount) * 100 : 0;
+    const contactToReply =
+      contactedCount > 0 ? (repliedCount / contactedCount) * 100 : 0;
+    const replyToInterested =
+      repliedCount > 0 ? (interestedCount / repliedCount) * 100 : 0;
+    const interestedToInstalled =
+      interestedCount > 0 ? (installedCount / interestedCount) * 100 : 0;
     const overallLeadToInstall = total > 0 ? (installedCount / total) * 100 : 0;
 
     return {
@@ -331,12 +351,139 @@ export class LeadFinderService {
         },
       },
       breakdowns: {
-        byCity: cityAgg.map((c) => ({ city: c._id || 'Unknown', count: c.count })),
-        byCategory: catAgg.map((c) => ({ category: c._id || 'Other', count: c.count })),
-        bySource: sourceAgg.map((s) => ({ source: s._id || 'other', count: s.count })),
+        byCity: cityAgg.map((c) => ({
+          city: c._id || 'Unknown',
+          count: c.count,
+        })),
+        byCategory: catAgg.map((c) => ({
+          category: c._id || 'Other',
+          count: c.count,
+        })),
+        bySource: sourceAgg.map((s) => ({
+          source: s._id || 'other',
+          count: s.count,
+        })),
         recentTrend30d: trendAgg.map((t) => ({ date: t._id, count: t.count })),
       },
       costTelemetry,
     };
   }
+
+  /** Leads per trade, and how far they have got — to see which trades install. */
+  async getTrades(city?: string) {
+    const match: Record<string, any> = {};
+    if (city?.trim()) match.city = new RegExp(`^${escapeRx(city.trim())}$`, 'i');
+    const has = (field: string) => ({ $cond: [{ $gt: [{ $strLenCP: { $ifNull: [field, ''] } }, 0] }, 1, 0] });
+    const is = (...statuses: string[]) => ({ $cond: [{ $in: ['$status', statuses] }, 1, 0] });
+    const rows = await this.leadModel.aggregate([
+      { $match: match },
+      {
+        $group: {
+          _id: '$category',
+          total: { $sum: 1 },
+          mobile: { $sum: { $cond: [{ $eq: ['$phoneType', 'mobile'] }, 1, 0] } },
+          withEmail: { $sum: has('$email') },
+          contacted: { $sum: is('CONTACTED', 'REPLIED', 'INTERESTED', 'INSTALLED', 'NOT_INTERESTED') },
+          replied: { $sum: is('REPLIED', 'INTERESTED', 'INSTALLED', 'NOT_INTERESTED') },
+          interested: { $sum: is('INTERESTED', 'INSTALLED') },
+          installed: { $sum: is('INSTALLED') },
+        },
+      },
+      { $sort: { total: -1 } },
+    ]);
+    return rows.map((r: any) => ({ category: r._id || 'other', ...r, _id: undefined }));
+  }
+
+  /**
+   * Leads per searched locality: how many were captured, how many can be
+   * reached, and how far they have moved — with the searches that ran there.
+   */
+  async getLocalities(city?: string, category?: string) {
+    const match: Record<string, any> = {};
+    if (city?.trim()) match.city = new RegExp(`^${escapeRx(city.trim())}$`, 'i');
+    if (category) match.category = category;
+    const has = (field: string) => ({ $cond: [{ $gt: [{ $strLenCP: { $ifNull: [field, ''] } }, 0] }, 1, 0] });
+    const is = (...statuses: string[]) => ({ $cond: [{ $in: ['$status', statuses] }, 1, 0] });
+
+    const [leadRows, jobRows] = await Promise.all([
+      this.leadModel.aggregate([
+        { $match: match },
+        {
+          $group: {
+            _id: { city: { $toLower: { $ifNull: ['$city', ''] } }, area: { $toLower: { $trim: { input: { $ifNull: ['$area', ''] } } } } },
+            city: { $first: '$city' },
+            area: { $first: '$area' },
+            total: { $sum: 1 },
+            mobile: { $sum: { $cond: [{ $eq: ['$phoneType', 'mobile'] }, 1, 0] } },
+            withPhone: { $sum: has('$phoneNormalized') },
+            withEmail: { $sum: has('$email') },
+            fresh: { $sum: is('NEW', 'REVIEWED') },
+            contacted: { $sum: is('CONTACTED', 'REPLIED', 'INTERESTED', 'INSTALLED', 'NOT_INTERESTED') },
+            replied: { $sum: is('REPLIED', 'INTERESTED', 'INSTALLED', 'NOT_INTERESTED') },
+            interested: { $sum: is('INTERESTED', 'INSTALLED') },
+            installed: { $sum: is('INSTALLED') },
+            lastAddedAt: { $max: '$createdAt' },
+          },
+        },
+      ]),
+      this.jobModel.aggregate([
+        { $match: { ...match, status: { $in: ['COMPLETED', 'RUNNING', 'FAILED', 'CANCELLED'] } } },
+        {
+          $group: {
+            _id: { city: { $toLower: { $ifNull: ['$city', ''] } }, area: { $toLower: { $trim: { input: { $ifNull: ['$area', ''] } } } } },
+            city: { $first: '$city' },
+            area: { $first: '$area' },
+            searches: { $sum: 1 },
+            newLeads: { $sum: '$newLeads' },
+            duplicates: { $sum: '$duplicateLeads' },
+            costUsd: { $sum: '$estimatedCostUsd' },
+            lastSearchedAt: { $max: '$createdAt' },
+          },
+        },
+      ]),
+    ]);
+
+    const key = (r: any) => `${r._id.city}|${r._id.area}`;
+    const jobs = new Map(jobRows.map((j: any) => [key(j), j]));
+    const rows = leadRows.map((r: any) => {
+      const j: any = jobs.get(key(r));
+      jobs.delete(key(r));
+      return { ...this.localityRow(r), ...this.jobPart(j) };
+    });
+    // Searches that found nothing new still belong on the list.
+    for (const j of jobs.values()) {
+      rows.push({ ...this.localityRow({ city: j.city, area: j.area }), ...this.jobPart(j) });
+    }
+    return rows.sort((a, b) => a.city.localeCompare(b.city) || b.total - a.total);
+  }
+
+  private localityRow(r: any) {
+    return {
+      city: r.city || 'Unknown',
+      area: (r.area || '').trim(),
+      total: r.total ?? 0,
+      mobile: r.mobile ?? 0,
+      withPhone: r.withPhone ?? 0,
+      withEmail: r.withEmail ?? 0,
+      fresh: r.fresh ?? 0,
+      contacted: r.contacted ?? 0,
+      replied: r.replied ?? 0,
+      interested: r.interested ?? 0,
+      installed: r.installed ?? 0,
+      lastAddedAt: r.lastAddedAt ?? null,
+    };
+  }
+
+  private jobPart(j: any) {
+    return {
+      searches: j?.searches ?? 0,
+      duplicates: j?.duplicates ?? 0,
+      costUsd: Number((j?.costUsd ?? 0).toFixed(3)),
+      lastSearchedAt: j?.lastSearchedAt ?? null,
+    };
+  }
+}
+
+function escapeRx(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

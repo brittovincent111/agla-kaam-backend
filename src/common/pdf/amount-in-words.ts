@@ -53,15 +53,60 @@ interface CurrencyWords {
 
 const CURRENCY_WORDS: Record<string, CurrencyWords> = {
   INR: { major: 'Rupees', minor: 'Paise', minorDigits: 2, system: 'indian' },
-  AED: { major: 'Dirhams', minor: 'Fils', minorDigits: 2, system: 'international' },
-  SAR: { major: 'Riyals', minor: 'Halalas', minorDigits: 2, system: 'international' },
-  QAR: { major: 'Riyals', minor: 'Dirhams', minorDigits: 2, system: 'international' },
-  OMR: { major: 'Rials', minor: 'Baisa', minorDigits: 3, system: 'international' },
-  KWD: { major: 'Dinars', minor: 'Fils', minorDigits: 3, system: 'international' },
-  BHD: { major: 'Dinars', minor: 'Fils', minorDigits: 3, system: 'international' },
-  USD: { major: 'Dollars', minor: 'Cents', minorDigits: 2, system: 'international' },
-  EUR: { major: 'Euros', minor: 'Cents', minorDigits: 2, system: 'international' },
-  GBP: { major: 'Pounds', minor: 'Pence', minorDigits: 2, system: 'international' },
+  AED: {
+    major: 'Dirhams',
+    minor: 'Fils',
+    minorDigits: 2,
+    system: 'international',
+  },
+  SAR: {
+    major: 'Riyals',
+    minor: 'Halalas',
+    minorDigits: 2,
+    system: 'international',
+  },
+  QAR: {
+    major: 'Riyals',
+    minor: 'Dirhams',
+    minorDigits: 2,
+    system: 'international',
+  },
+  OMR: {
+    major: 'Rials',
+    minor: 'Baisa',
+    minorDigits: 3,
+    system: 'international',
+  },
+  KWD: {
+    major: 'Dinars',
+    minor: 'Fils',
+    minorDigits: 3,
+    system: 'international',
+  },
+  BHD: {
+    major: 'Dinars',
+    minor: 'Fils',
+    minorDigits: 3,
+    system: 'international',
+  },
+  USD: {
+    major: 'Dollars',
+    minor: 'Cents',
+    minorDigits: 2,
+    system: 'international',
+  },
+  EUR: {
+    major: 'Euros',
+    minor: 'Cents',
+    minorDigits: 2,
+    system: 'international',
+  },
+  GBP: {
+    major: 'Pounds',
+    minor: 'Pence',
+    minorDigits: 2,
+    system: 'international',
+  },
 };
 
 function belowThousand(value: number): string {
@@ -128,8 +173,7 @@ function internationalSystem(value: number): string {
 }
 
 export function amountInWords(amount: number, currencyCode = 'INR'): string {
-  const config =
-    CURRENCY_WORDS[(currencyCode || 'INR').toUpperCase()] ??
+  const config = CURRENCY_WORDS[(currencyCode || 'INR').toUpperCase()] ??
     // An unmapped currency still gets a correct number, just with the ISO
     // code standing in for a major-unit name it has no word for.
     {
@@ -147,7 +191,8 @@ export function amountInWords(amount: number, currencyCode = 'INR'): string {
   const major = Math.floor(totalMinor / factor);
   const minor = totalMinor % factor;
 
-  const toWords = config.system === 'indian' ? indianSystem : internationalSystem;
+  const toWords =
+    config.system === 'indian' ? indianSystem : internationalSystem;
   const sign = amount < 0 ? 'Minus ' : '';
   const majorWords = `${sign}${config.major} ${toWords(major)}`.trim();
 

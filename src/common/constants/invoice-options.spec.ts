@@ -1,4 +1,7 @@
-import { calculateInvoiceTotals, computeDisplayStatus } from './invoice-options';
+import {
+  calculateInvoiceTotals,
+  computeDisplayStatus,
+} from './invoice-options';
 
 describe('calculateInvoiceTotals', () => {
   it('returns all zeros for no items and no discount', () => {
@@ -21,7 +24,7 @@ describe('calculateInvoiceTotals', () => {
     expect(totals.total).toBe(450);
   });
 
-  it('computes tax per item at that item\'s own taxRate, not a blended rate', () => {
+  it("computes tax per item at that item's own taxRate, not a blended rate", () => {
     // 100 @ 18% = 18, 200 @ 5% = 10 — items must not share one rate.
     const totals = calculateInvoiceTotals([
       { quantity: 1, rate: 100, taxRate: 18 },
@@ -205,13 +208,19 @@ describe('calculateInvoiceTotals — discount and tax interaction', () => {
       ],
       100,
     );
-    const summed = totals.lines.reduce((sum, line) => sum + line.discountShare, 0);
+    const summed = totals.lines.reduce(
+      (sum, line) => sum + line.discountShare,
+      0,
+    );
     expect(Math.round(summed * 100) / 100).toBe(100);
     expect(totals.discount).toBe(100);
   });
 
   it('never discounts below zero', () => {
-    const totals = calculateInvoiceTotals([{ quantity: 1, rate: 100, taxRate: 18 }], 500);
+    const totals = calculateInvoiceTotals(
+      [{ quantity: 1, rate: 100, taxRate: 18 }],
+      500,
+    );
     expect(totals.discount).toBe(100);
     expect(totals.lines[0].taxableAmount).toBe(0);
     expect(totals.taxTotal).toBe(0);

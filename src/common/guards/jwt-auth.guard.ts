@@ -4,11 +4,25 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  NotFoundException,
   Optional,
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { SubscriptionsService } from '../../subscriptions/subscriptions.service';
+import { TeamMembersService } from '../../team-members/team-members.service';
+
+/**
+ * How long a technician's "still active" result is trusted before re-checking.
+ *
+ * Without any check a deactivated technician kept full access — customer phone
+ * numbers, doorstep GPS pins, job logging — until their 30-day token expired.
+ * Checking on literally every request would put a database round trip in front
+ * of all of them, so the answer is cached briefly: removing someone takes
+ * effect within a minute rather than a month.
+ */
+const ACTIVE_TTL_MS = 60_000;
+const activeCache = new Map<string, { until: number }>();
 
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
@@ -17,6 +31,9 @@ export class JwtAuthGuard implements CanActivate {
     @Optional()
     @Inject(SubscriptionsService)
     private readonly subscriptionsService?: SubscriptionsService,
+    @Optional()
+    @Inject(TeamMembersService)
+    private readonly teamMembersService?: TeamMembersService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -40,19 +57,57 @@ export class JwtAuthGuard implements CanActivate {
         teamMemberId: payload.teamMemberId,
       };
 
-      if (payload.role === 'technician' && this.subscriptionsService) {
-        const hasTeam = await this.subscriptionsService.hasActiveTeamAddon(
-          payload.sub,
-        );
-        if (!hasTeam) {
-          throw new ForbiddenException(
-            "The owner's subscription is expired or does not include active team access.",
-          );
+      if (payload.role === 'technician') {
+        // Fails closed on purpose. If this service is somehow not injectable,
+        // refusing the technician is the safe outcome — skipping the check is
+        // what let removed staff keep working for up to 30 days.
+        if (!this.teamMembersService) {
+          throw new ForbiddenException('Technician access cannot be verified.');
+        }
+
+        // Before the seat check: a deactivated member no longer counts toward
+        // the seats either, so checking seats first told a removed technician
+        // the owner's subscription had lapsed.
+        const cacheKey = `${payload.sub}:${payload.teamMemberId}`;
+        const cached = activeCache.get(cacheKey);
+        if (!cached || cached.until < Date.now()) {
+          pruneActiveCache();
+          // Throws NotFoundException when the member is missing, belongs to
+          // another business, or has been deactivated.
+          await this.teamMembersService
+            .assertActiveMember(payload.sub, payload.teamMemberId)
+            .catch((err) => {
+              if (err instanceof NotFoundException) {
+                throw memberRemoved();
+              }
+              throw err;
+            });
+          activeCache.set(cacheKey, { until: Date.now() + ACTIVE_TTL_MS });
+        }
+
+        if (this.subscriptionsService) {
+          // One rule with or without Team: the technician must be inside the
+          // business's seat limit — the free test seat without Team, the
+          // standard or granted seats with it (earliest-added first).
+          const hasSeat = payload.teamMemberId
+            ? await this.teamMembersService.holdsSeat(
+                payload.sub,
+                payload.teamMemberId,
+              )
+            : await this.subscriptionsService.hasActiveTeamAddon(payload.sub);
+          if (!hasSeat) {
+            throw new ForbiddenException(
+              "The owner's subscription is expired or does not include active team access.",
+            );
+          }
         }
       }
 
       return true;
     } catch (err) {
+      // A deactivated technician must not be reported as a bad token — that
+      // sends them to the login screen to retry forever instead of telling
+      // them their access was removed.
       if (err instanceof ForbiddenException) {
         throw err;
       }
@@ -61,3 +116,36 @@ export class JwtAuthGuard implements CanActivate {
   }
 }
 
+/**
+ * A removed (deactivated or deleted) technician. 403 rather than the 404
+ * assertActiveMember raises: the app reads a 404 on a normal request as "the
+ * server is unreachable" and kept the technician in an offline loop. `code`
+ * lets the app recognise this one case mid-session and sign them out with
+ * the message, whichever request hit it.
+ */
+export const MEMBER_REMOVED_CODE = 'MEMBER_REMOVED';
+export function memberRemoved(): ForbiddenException {
+  return new ForbiddenException({
+    statusCode: 403,
+    error: 'Forbidden',
+    code: MEMBER_REMOVED_CODE,
+    message:
+      'Your access to this business has been removed. Ask the owner if this is a mistake.',
+  });
+}
+
+/**
+ * Drops expired entries, and empties the map outright if it somehow grows
+ * past a sane bound. Without this the cache is a map that only ever grows —
+ * one entry per technician per process, for the life of the process.
+ */
+function pruneActiveCache(): void {
+  if (activeCache.size > 10_000) {
+    activeCache.clear();
+    return;
+  }
+  const now = Date.now();
+  for (const [key, value] of activeCache) {
+    if (value.until < now) activeCache.delete(key);
+  }
+}

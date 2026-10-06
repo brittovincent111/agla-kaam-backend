@@ -76,10 +76,14 @@ export class BusinessesController {
 
   @Roles('owner')
   @Patch('me')
-  updateProfile(
+  async updateProfile(
     @CurrentBusiness() business: AuthenticatedBusiness,
     @Body() dto: UpdateBusinessDto,
   ) {
+    await this.businessesService.assertNextSerialsAhead(
+      business.businessId,
+      dto,
+    );
     return this.businessesService.update(business.businessId, dto);
   }
 
@@ -193,6 +197,20 @@ export class BusinessesController {
         business.businessId,
         dto.pushToken,
       );
+    }
+    return { success: true };
+  }
+
+  // Called by the app right before logout, owner or technician — routed the
+  // same way as the POST above, so it only ever clears the caller's own token.
+  @Delete('me/push-token')
+  async clearPushToken(@CurrentBusiness() business: AuthenticatedBusiness) {
+    if (business.role === 'technician' && business.teamMemberId) {
+      await this.businessesService.clearTeamMemberPushToken(
+        business.teamMemberId,
+      );
+    } else {
+      await this.businessesService.clearPushToken(business.businessId);
     }
     return { success: true };
   }

@@ -1,3 +1,4 @@
+import { NestExpressApplication } from '@nestjs/platform-express';
 import * as crypto from 'crypto';
 if (!globalThis.crypto) {
   (globalThis as any).crypto = crypto.webcrypto || crypto;
@@ -9,6 +10,8 @@ if (!globalThis.crypto) {
 import { installFetchPolyfill } from './common/http/fetch-polyfill';
 installFetchPolyfill();
 
+import compression = require('compression');
+import helmet from 'helmet';
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -56,9 +59,65 @@ function logEnvPresence(configService: ConfigService) {
 }
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { rawBody: true });
-  logEnvPresence(app.get(ConfigService));
-  app.enableCors();
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
+  // Behind nginx every request arrives from the proxy's address. Without this
+  // the rate limiter counts all users as one client, so a handful of logins a
+  // minute locks everyone out. Trust exactly one hop (our nginx), which sets
+  // X-Forwarded-For; trusting more would let clients spoof their address.
+  app.set('trust proxy', 1);
+  const configService = app.get(ConfigService);
+  logEnvPresence(configService);
+  // Gzip before anything writes a body. JSON list payloads compress heavily,
+  // which matters most on the patchy mobile connections this app is used on.
+  app.use(compression());
+
+  // Baseline security headers: HSTS, nosniff, frame-deny and friends.
+  // contentSecurityPolicy is off because this is a JSON API with no pages of
+  // its own, and a default CSP only produces noise here.
+  app.use(helmet({ contentSecurityPolicy: false }));
+
+  // An explicit allowlist instead of the previous bare enableCors(), which
+  // reflected back any origin that asked. Mobile apps send no Origin header
+  // and are unaffected; this is about what a browser on someone else's site
+  // is allowed to do with a logged-in session.
+  const isDev = configService.get<string>('NODE_ENV') !== 'production';
+  const configuredOrigins = (
+    configService.get<string>('CORS_ORIGINS') ??
+    'https://aglakaam.app,https://www.aglakaam.app'
+  )
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+
+  const defaultDevOrigins = [
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'http://localhost:3002',
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:3001',
+    'http://127.0.0.1:3002',
+  ];
+
+  const allowedOrigins = isDev
+    ? Array.from(new Set([...configuredOrigins, ...defaultDevOrigins]))
+    : configuredOrigins;
+
+  app.enableCors({
+    origin(origin, callback) {
+      // No Origin: native app, curl, server-to-server webhooks.
+      if (
+        !origin ||
+        allowedOrigins.includes(origin) ||
+        (isDev && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin))
+      ) {
+        return callback(null, true);
+      }
+      return callback(null, false);
+    },
+    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+    credentials: true,
+  });
   app.setGlobalPrefix('api');
   app.enableShutdownHooks();
   app.useGlobalFilters(new AllExceptionsFilter());

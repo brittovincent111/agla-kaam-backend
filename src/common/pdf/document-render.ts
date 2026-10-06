@@ -1,5 +1,10 @@
 import PDFDocument = require('pdfkit');
-import { DocumentTemplateColors, DocumentTemplateTheme } from './document-templates';
+import {
+  DocumentTemplateColors,
+  DocumentTemplateTheme,
+} from './document-templates';
+import { allocateDiscount } from '../constants/invoice-options';
+import type { GstSupply } from './place-of-supply';
 
 // The shared PDF engine behind both invoices and quotations.
 //
@@ -126,6 +131,10 @@ export interface DocumentSpec {
   // (Modern, Compact) omit the row instead of printing it twice.
   numberLabel: string;
   recipientLabel: string;
+  // Label for the sending party's block. Every layout says BILL FROM /
+  // BILL TO; only a purchase order turns it round, since there the supplier
+  // bills the business.
+  senderLabel?: string;
   status: RenderStatus;
   metaRows: { label: string; value: string }[];
   items: RenderItem[];
@@ -141,6 +150,9 @@ export interface DocumentSpec {
   taxType: string;
   country: string;
   footerNote: string;
+  // The business's "top message" for this document type — an opening line
+  // ("Dear Sir/Madam, we are pleased to quote…") printed above the items.
+  topMessage?: string;
   serviceContext?: RenderServiceContext;
   payment?: RenderPaymentSummary;
   // True when at least one line carries tax — lets a layout drop the whole
@@ -151,6 +163,13 @@ export interface DocumentSpec {
   // (quotationShowSignature and friends). Omitted means show everything, so
   // every existing caller keeps its current output.
   show?: { signature?: boolean; hsn?: boolean; serviceAddress?: boolean };
+  // Indian GST only: which state each party is in, and whether the supply
+  // crosses states (IGST) or not (CGST + SGST). Absent for every other tax
+  // regime, and for documents that carry no GST.
+  supply?: GstSupply;
+  // The discount actually applied, so a layout's tax summary can state each
+  // rate's taxable value exactly as the stored tax was calculated.
+  discount?: number;
   // Overrides the items column header. A purchase order is not a service
   // call, so "SERVICE / ITEM" is wrong on one.
   itemLabel?: string;
@@ -177,7 +196,9 @@ const CURRENCY_SYMBOLS: Record<string, string> = {
 const THREE_DECIMAL_CURRENCIES = new Set(['OMR', 'KWD', 'BHD']);
 
 export function currencyDecimals(currencyCode = 'INR'): number {
-  return THREE_DECIMAL_CURRENCIES.has((currencyCode || 'INR').toUpperCase()) ? 3 : 2;
+  return THREE_DECIMAL_CURRENCIES.has((currencyCode || 'INR').toUpperCase())
+    ? 3
+    : 2;
 }
 
 export function currencySymbol(currencyCode = 'INR'): string {
@@ -304,7 +325,7 @@ export interface PaymentLine {
  * RenderItem calls it `hsn` alongside the other presentation fields.
  */
 export function toRenderItems(
-  items: (Omit<RenderItem, "hsn"> & { hsnCode?: string })[],
+  items: (Omit<RenderItem, 'hsn'> & { hsnCode?: string })[],
 ): RenderItem[] {
   return items.map((item) => ({ ...item, hsn: item.hsnCode }));
 }
@@ -335,7 +356,8 @@ export function paymentLines(business: RenderBusiness): PaymentLine[] {
   if (business.paymentQrContent) {
     lines.push({ label: 'Pay QR', value: 'Scan QR Code on invoice to pay' });
   }
-  if (business.paymentUpiId) lines.push({ label: 'UPI', value: business.paymentUpiId });
+  if (business.paymentUpiId)
+    lines.push({ label: 'UPI', value: business.paymentUpiId });
   if (business.bankDetails) {
     lines.push({ label: 'Bank', value: business.bankDetails });
   } else {
@@ -475,7 +497,9 @@ export function columnPad(col: ResolvedColumn, requested: number): number {
 // description into 8pt of usable width, wrapping one sentence onto forty
 // lines and quietly turning a 2-page invoice into a 7-page one.
 export function descriptionColumn(cols: ResolvedColumn[]): ResolvedColumn {
-  return cols.find((col) => col.key === 'name') ?? cols[cols.length > 1 ? 1 : 0];
+  return (
+    cols.find((col) => col.key === 'name') ?? cols[cols.length > 1 ? 1 : 0]
+  );
 }
 
 export function resolveColumns(
@@ -489,7 +513,8 @@ export function resolveColumns(
 
   let cursor = x;
   return columns.map((col) => {
-    const w = col.width ?? (flexTotal > 0 ? (free * (col.flex ?? 0)) / flexTotal : 0);
+    const w =
+      col.width ?? (flexTotal > 0 ? (free * (col.flex ?? 0)) / flexTotal : 0);
     const resolved = { ...col, x: cursor, w };
     cursor += w;
     return resolved;
@@ -512,6 +537,9 @@ export interface TableStyle {
   outerBorder: boolean;
   headerFill: 'accent' | 'tint' | 'none';
   headerRule: boolean;
+  // The column drawn in bold. Defaults to the first — which, on a layout
+  // leading with a "#" column, is the row number rather than the item.
+  boldColumn?: string;
 }
 
 export const DEFAULT_TABLE_STYLE: TableStyle = {
@@ -551,7 +579,10 @@ function drawTableHeader(
         ? colors.tintText
         : colors.textMuted;
 
-  doc.font('Helvetica-Bold').fontSize(8 * s).fillColor(labelColor);
+  doc
+    .font('Helvetica-Bold')
+    .fontSize(8 * s)
+    .fillColor(labelColor);
   cols.forEach((col) => {
     const pad = columnPad(col, style.cellPadX * s);
     doc.text(col.label, col.x + pad, y + height / 2 - 4 * s, {
@@ -573,6 +604,15 @@ function drawTableHeader(
   return y + height;
 }
 
+function cellFont(
+  style: TableStyle,
+  col: ResolvedColumn,
+  colIndex: number,
+): string {
+  const bold = style.boldColumn ? col.key === style.boldColumn : colIndex === 0;
+  return bold ? 'Helvetica-Bold' : 'Helvetica';
+}
+
 function measureRow(
   ctx: Ctx,
   cols: ResolvedColumn[],
@@ -589,10 +629,19 @@ function measureRow(
   );
 
   let tallest = 0;
-  cols.forEach((col) => {
+  cols.forEach((col, colIndex) => {
     const value = row.cells[col.key] ?? '';
     const w = Math.max(1, col.w - columnPad(col, style.cellPadX * s) * 2);
-    const h = measureText(doc, value, w, 'Helvetica', 9.5 * s);
+    // Measured in the font it is drawn in. The bold column measured as
+    // regular fitted one line, then wrapped to two when drawn, and the
+    // description beneath was printed over its second line.
+    const h = measureText(
+      doc,
+      value,
+      w,
+      cellFont(style, col, colIndex),
+      9.5 * s,
+    );
     if (h > tallest) tallest = h;
   });
 
@@ -600,7 +649,13 @@ function measureRow(
     return { height: Math.max(22 * s, padY * 2 + tallest), descTop: 0 };
   }
   const gap = 3 * s;
-  const descHeight = measureText(doc, row.description, textWidth, 'Helvetica', 8 * s);
+  const descHeight = measureText(
+    doc,
+    row.description,
+    textWidth,
+    'Helvetica',
+    8 * s,
+  );
   return {
     height: Math.max(30 * s, padY * 2 + tallest + gap + descHeight),
     descTop: tallest + gap,
@@ -623,7 +678,9 @@ export function drawTable(
 
   // The header must fit with at least one row under it, or it belongs on the
   // next page rather than stranded at the foot of this one.
-  const firstRowHeight = rows.length ? measureRow(ctx, cols, rows[0], style).height : 0;
+  const firstRowHeight = rows.length
+    ? measureRow(ctx, cols, rows[0], style).height
+    : 0;
   canvas.ensure(style.headerHeight * s + firstRowHeight);
 
   let bodyTop = drawTableHeader(ctx, cols, x, width, canvas.y, style);
@@ -644,7 +701,12 @@ export function drawTable(
     }
     if (style.outerBorder) {
       doc
-        .rect(x, sectionTop - style.headerHeight * s, width, endY - sectionTop + style.headerHeight * s)
+        .rect(
+          x,
+          sectionTop - style.headerHeight * s,
+          width,
+          endY - sectionTop + style.headerHeight * s,
+        )
         .strokeColor(colors.border)
         .lineWidth(0.8)
         .stroke();
@@ -673,7 +735,7 @@ export function drawTable(
       const value = row.cells[col.key] ?? '';
       const pad = columnPad(col, style.cellPadX * s);
       doc
-        .font(colIndex === 0 ? 'Helvetica-Bold' : 'Helvetica')
+        .font(cellFont(style, col, colIndex))
         .fontSize(9.5 * s)
         .fillColor(colors.text)
         .text(value, col.x + pad, textY, {
@@ -737,7 +799,11 @@ export function drawLogoBadge(
   if (mode === 'on-color') {
     doc.circle(cx, cy, radius).fill(colors.onPrimary);
   } else {
-    doc.circle(cx, cy, radius).lineWidth(1.2).strokeColor(colors.primaryInk).stroke();
+    doc
+      .circle(cx, cy, radius)
+      .lineWidth(1.2)
+      .strokeColor(colors.primaryInk)
+      .stroke();
   }
 
   if (business.logo) {
@@ -772,11 +838,15 @@ export function drawStatusPill(
   const { doc, colors, spec } = ctx;
   const style = statusStyle(spec.status.tone, colors);
   doc.font('Helvetica-Bold').fontSize(8 * scale);
-  const textWidth = doc.widthOfString(spec.status.label, { characterSpacing: 0.5 });
+  const textWidth = doc.widthOfString(spec.status.label, {
+    characterSpacing: 0.5,
+  });
   const pillWidth = textWidth + 22 * scale;
   const pillHeight = 19 * scale;
   const pillX = rightEdge - pillWidth;
-  doc.roundedRect(pillX, y, pillWidth, pillHeight, pillHeight / 2).fill(style.bg);
+  doc
+    .roundedRect(pillX, y, pillWidth, pillHeight, pillHeight / 2)
+    .fill(style.bg);
   doc.fillColor(style.text).text(spec.status.label, pillX, y + 5.5 * scale, {
     width: pillWidth,
     align: 'center',
@@ -835,9 +905,14 @@ export function drawPartyBlock(
       .font('Helvetica-Bold')
       .fontSize(8.5)
       .fillColor(colors.textSecondary)
-      .text(`${taxIdLabel(spec.taxType, spec.country)}: ${party.taxId}`, x, cursor + 2, {
-        width,
-      });
+      .text(
+        `${taxIdLabel(spec.taxType, spec.country)}: ${party.taxId}`,
+        x,
+        cursor + 2,
+        {
+          width,
+        },
+      );
     cursor = doc.y;
   }
   return cursor;
@@ -900,7 +975,7 @@ export function drawTotals(ctx: Ctx, top: number, style: TotalsStyle): number {
 
     const labelColor = barred
       ? colors.onPrimary
-      : style.labelColor ??
+      : (style.labelColor ??
         (inverted
           ? isStrong
             ? colors.onPrimary
@@ -909,13 +984,14 @@ export function drawTotals(ctx: Ctx, top: number, style: TotalsStyle): number {
               row.color,
               colors,
               isStrong ? colors.text : colors.textSecondary,
-            ));
+            )));
     const valueColor = barred
       ? colors.onPrimary
-      : style.valueColor ?? labelColor;
+      : (style.valueColor ?? labelColor);
 
     const pad = barred ? 10 * s : 0;
-    const textY = y + (rowHeight - (isGrand ? 12 : isStrong ? 11 : 9.5) * s) / 2;
+    const textY =
+      y + (rowHeight - (isGrand ? 12 : isStrong ? 11 : 9.5) * s) / 2;
 
     doc
       .font(isStrong ? 'Helvetica-Bold' : 'Helvetica')
@@ -924,12 +1000,10 @@ export function drawTotals(ctx: Ctx, top: number, style: TotalsStyle): number {
       .text(row.label, style.x + pad, textY, { width: style.width / 2 - pad });
 
     const value = `${row.negative ? '- ' : ''}${formatCurrency(row.value, spec.currency)}`;
-    doc
-      .fillColor(valueColor)
-      .text(value, style.x + style.width / 2, textY, {
-        width: style.width / 2 - pad,
-        align: 'right',
-      });
+    doc.fillColor(valueColor).text(value, style.x + style.width / 2, textY, {
+      width: style.width / 2 - pad,
+      align: 'right',
+    });
 
     y += rowHeight;
   });
@@ -1005,7 +1079,14 @@ export function drawPaymentBlock(
   if (!lines.length && !business.paymentQrBuffer) return y;
   const s = opts.scale ?? 1;
 
-  let cursor = drawSectionLabel(ctx, 'PAYMENT INFORMATION', x, y, width, opts.labelColor);
+  let cursor = drawSectionLabel(
+    ctx,
+    'PAYMENT INFORMATION',
+    x,
+    y,
+    width,
+    opts.labelColor,
+  );
   const textWidth = business.paymentQrBuffer ? width - 75 * s : width;
   lines.forEach((line) => {
     doc
@@ -1032,6 +1113,24 @@ export function drawPaymentBlock(
     if (y + qrSize > cursor) cursor = y + qrSize + 4;
   }
   return cursor;
+}
+
+// The opening message, set as a paragraph just above the item table — where
+// a letter-style quotation or PO says what follows. Every layout calls this
+// in the same place, so the setting works whichever template is chosen.
+export function drawTopMessage(ctx: Ctx): void {
+  const text = ctx.spec.topMessage?.trim();
+  if (!text) return;
+  const { doc, colors, canvas } = ctx;
+  const width = canvas.contentWidth;
+  const height = measureText(doc, text, width, 'Helvetica', 9.5);
+  canvas.ensure(height + 14);
+  doc
+    .font('Helvetica')
+    .fontSize(9.5)
+    .fillColor(colors.textSecondary)
+    .text(text, canvas.contentX, canvas.y, { width });
+  canvas.y += height + 14;
 }
 
 // Height the signature block will occupy. A business with no uploaded
@@ -1084,7 +1183,9 @@ export function drawSignatureBlock(
 // "GST (18%)" instead of a bare "GST". Returns null for a mixed-rate invoice,
 // where naming one rate would misstate the others.
 export function uniformTaxRate(items: RenderItem[]): number | null {
-  const rates = new Set(items.filter((item) => item.taxRate > 0).map((item) => item.taxRate));
+  const rates = new Set(
+    items.filter((item) => item.taxRate > 0).map((item) => item.taxRate),
+  );
   return rates.size === 1 ? [...rates][0] : null;
 }
 
@@ -1109,16 +1210,91 @@ export function buildTaxRows(
   taxType: string,
   taxTotal: number,
   items: RenderItem[],
+  opts: { interState?: boolean } = {},
 ): RenderTotalRow[] {
   if (taxType === 'none' || taxTotal === 0) return [];
   const rate = uniformTaxRate(items);
 
   if (taxType === 'gst') {
+    // Across states the whole tax is IGST; within one it is halved.
+    if (opts.interState) {
+      return [{ label: `IGST${rateSuffix(rate)}`, value: taxTotal }];
+    }
     const half = rate === null ? null : rate / 2;
+    const { central, state } = gstHalves(items, taxTotal);
     return [
-      { label: `CGST${rateSuffix(half)}`, value: taxTotal / 2 },
-      { label: `SGST${rateSuffix(half)}`, value: taxTotal / 2 },
+      { label: `CGST${rateSuffix(half)}`, value: central },
+      { label: `SGST${rateSuffix(half)}`, value: state },
     ];
   }
-  return [{ label: `${taxTypeName(taxType)}${rateSuffix(rate)}`, value: taxTotal }];
+  return [
+    { label: `${taxTypeName(taxType)}${rateSuffix(rate)}`, value: taxTotal },
+  ];
+}
+
+function round2(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+// CGST and SGST as two amounts that add back up to the tax charged. Halving
+// without rounding printed 99.01 as 49.51 + 49.51 — a paisa more than the
+// invoice actually charges.
+export function splitGst(tax: number): { central: number; state: number } {
+  const central = round2(tax / 2);
+  return { central, state: round2(tax - central) };
+}
+
+/**
+ * CGST and SGST for a whole document: each rate's tax is halved on its own
+ * and the halves summed, so the totals agree with a per-rate summary to the
+ * paisa. Halving the grand tax total instead could differ from the sum of the
+ * rows by one.
+ */
+export function gstHalves(
+  items: { taxRate: number; taxAmount: number }[],
+  taxTotal: number,
+): { central: number; state: number } {
+  const byRate = new Map<number, number>();
+  items.forEach((item) => {
+    if (item.taxRate > 0)
+      byRate.set(
+        item.taxRate,
+        (byRate.get(item.taxRate) ?? 0) + item.taxAmount,
+      );
+  });
+  if (!byRate.size) return splitGst(taxTotal);
+  const central = round2(
+    [...byRate.values()].reduce((sum, tax) => sum + splitGst(tax).central, 0),
+  );
+  return { central, state: round2(taxTotal - central) };
+}
+
+export interface TaxSummaryRow {
+  rate: number;
+  taxable: number;
+  tax: number;
+}
+
+/**
+ * One row per tax rate: the value taxed at it and the tax charged. Taxable
+ * value is each line's amount less its share of the document discount —
+ * allocated the same way the stored tax was calculated — so the table agrees
+ * with the tax column to the paisa.
+ */
+export function taxSummary(spec: DocumentSpec): TaxSummaryRow[] {
+  const amounts = spec.items.map((item) => item.amount);
+  const shares = allocateDiscount(amounts, spec.discount ?? 0);
+  const byRate = new Map<number, TaxSummaryRow>();
+  spec.items.forEach((item, i) => {
+    if (!(item.taxRate > 0)) return;
+    const row = byRate.get(item.taxRate) ?? {
+      rate: item.taxRate,
+      taxable: 0,
+      tax: 0,
+    };
+    row.taxable = round2(row.taxable + item.amount - (shares[i] ?? 0));
+    row.tax = round2(row.tax + item.taxAmount);
+    byRate.set(item.taxRate, row);
+  });
+  return [...byRate.values()].sort((a, b) => a.rate - b.rate);
 }

@@ -9,6 +9,8 @@ import {
   MinLength,
   ValidateIf,
   ValidateNested,
+  IsBoolean,
+  Matches,
 } from 'class-validator';
 import {
   NEXT_SERVICE_INTERVALS,
@@ -71,4 +73,20 @@ export class CreateServiceDto {
   @IsOptional()
   @IsMongoId()
   amcId?: string;
+
+  /**
+   * Whether the customer agreed to this visit (true) or it is only a date to
+   * remind them (false). The app asks when a visit is logged. Omitted (older
+   * apps): a visit dated today or tomorrow is taken as booked, anything later
+   * as a reminder — which is what "log next visit" in six months always was.
+   */
+  @IsOptional()
+  @IsBoolean()
+  booked?: boolean;
+
+  // 'morning' | 'afternoon' | 'evening', or 'HH:mm'.
+  @IsOptional()
+  @IsString()
+  @Matches(/^(|morning|afternoon|evening|([01]\d|2[0-3]):[0-5]\d)$/)
+  visitSlot?: string;
 }

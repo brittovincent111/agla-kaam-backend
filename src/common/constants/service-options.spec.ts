@@ -16,6 +16,18 @@ describe('resolveWarrantyExpiry', () => {
     );
   });
 
+  it('clamps a 29 Feb warranty to 28 Feb the next year', () => {
+    expect(resolveWarrantyExpiry(new Date(2028, 1, 29), '1y')).toEqual(
+      new Date(2029, 1, 28),
+    );
+  });
+
+  it('clamps 31 Aug + 6 months to the end of February', () => {
+    expect(resolveWarrantyExpiry(new Date(2026, 7, 31), '6m')).toEqual(
+      new Date(2027, 1, 28),
+    );
+  });
+
   it('adds 12 months for "1y"', () => {
     expect(resolveWarrantyExpiry(serviceDate, '1y')).toEqual(
       new Date('2027-01-01T00:00:00.000Z'),
@@ -41,9 +53,29 @@ describe('resolveNextServiceDate', () => {
     expect(resolveNextServiceDate(serviceDate, 'none')).toEqual(serviceDate);
   });
 
-  it('adds 1 month for "1m"', () => {
-    expect(resolveNextServiceDate(serviceDate, '1m')).toEqual(
-      new Date('2026-03-03T00:00:00.000Z'),
+  // Local-time dates: addMonths works in the server's own calendar, so a
+  // UTC midnight would land on a different day in a negative-offset zone.
+  it('clamps 31 Jan + 1 month to the end of February, not 3 March', () => {
+    expect(resolveNextServiceDate(new Date(2026, 0, 31), '1m')).toEqual(
+      new Date(2026, 1, 28),
+    );
+  });
+
+  it('clamps to 29 February in a leap year', () => {
+    expect(resolveNextServiceDate(new Date(2028, 0, 31), '1m')).toEqual(
+      new Date(2028, 1, 29),
+    );
+  });
+
+  it('clamps 31 Aug + 3 months to 30 November', () => {
+    expect(resolveNextServiceDate(new Date(2026, 7, 31), '3m')).toEqual(
+      new Date(2026, 10, 30),
+    );
+  });
+
+  it('keeps the day of month when it exists in the target month', () => {
+    expect(resolveNextServiceDate(new Date(2026, 0, 15, 10, 30), '1m')).toEqual(
+      new Date(2026, 1, 15, 10, 30),
     );
   });
 

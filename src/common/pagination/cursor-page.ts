@@ -70,10 +70,13 @@ export function pageCursorFilter(
   if (!cursor) return {};
   const beyond = direction === 'desc' ? '$lt' : '$gt';
   const value =
-    keyType === 'date' && typeof cursor.v === 'string' ? new Date(cursor.v) : cursor.v;
+    keyType === 'date' && typeof cursor.v === 'string'
+      ? new Date(cursor.v)
+      : cursor.v;
   // A cursor whose key is not a valid date would make Mongo match nothing at
   // all, silently ending the list early; fall back to id-only paging.
-  const usable = value instanceof Date && Number.isNaN(value.getTime()) ? cursor.v : value;
+  const usable =
+    value instanceof Date && Number.isNaN(value.getTime()) ? cursor.v : value;
   return {
     $or: [
       { [field]: { [beyond]: usable } },
@@ -104,7 +107,9 @@ export function pageSort(
 export function andFilters(
   ...fragments: Record<string, unknown>[]
 ): Record<string, unknown> {
-  const parts = fragments.filter((fragment) => Object.keys(fragment).length > 0);
+  const parts = fragments.filter(
+    (fragment) => Object.keys(fragment).length > 0,
+  );
   if (parts.length === 0) return {};
   if (parts.length === 1) return { ...parts[0] };
   return { $and: parts };
@@ -134,7 +139,9 @@ export function textSearchFilter(
   if (!term || fields.length === 0) return {};
   const escaped = escapeRegex(term);
   return {
-    $or: fields.map((field) => ({ [field]: { $regex: escaped, $options: 'i' } })),
+    $or: fields.map((field) => ({
+      [field]: { $regex: escaped, $options: 'i' },
+    })),
   };
 }
 

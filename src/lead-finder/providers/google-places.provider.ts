@@ -1,3 +1,4 @@
+import { searchQueryFor } from '../trades';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -53,7 +54,7 @@ export class GooglePlacesProvider implements LeadSourceProvider {
     }
 
     const locationQuery = [
-      params.keyword || params.category,
+      params.keyword || searchQueryFor(params.category),
       params.area,
       params.city,
       params.state,
@@ -89,7 +90,9 @@ export class GooglePlacesProvider implements LeadSourceProvider {
       'nextPageToken',
     ].join(',');
 
-    const url = 'https://places.googleapis.com/v1/places:searchText';
+    // GOOGLE_PLACES_BASE_URL: tests point this at a local fake.
+    const base = (this.configService.get<string>('GOOGLE_PLACES_BASE_URL') || 'https://places.googleapis.com').replace(/\/+$/, '');
+    const url = `${base}/v1/places:searchText`;
 
     const response = await fetch(url, {
       method: 'POST',
@@ -108,7 +111,9 @@ export class GooglePlacesProvider implements LeadSourceProvider {
       );
 
       if (response.status === 429) {
-        throw new Error('Google Places API quota/rate limit exceeded (HTTP 429)');
+        throw new Error(
+          'Google Places API quota/rate limit exceeded (HTTP 429)',
+        );
       }
       if (response.status === 401 || response.status === 403) {
         throw new Error(
@@ -126,20 +131,30 @@ export class GooglePlacesProvider implements LeadSourceProvider {
     };
 
     const rawPlaces = data.places || [];
-    console.log('\n================== GOOGLE PLACES API RESPONSE ==================');
-    console.log(`[GooglePlacesProvider] Query: "${locationQuery}" | Found: ${rawPlaces.length} places`);
+    console.log(
+      '\n================== GOOGLE PLACES API RESPONSE ==================',
+    );
+    console.log(
+      `[GooglePlacesProvider] Query: "${locationQuery}" | Found: ${rawPlaces.length} places`,
+    );
     if (rawPlaces.length > 0) {
       console.log('[GooglePlacesProvider] Sample Raw Place Structure:');
       console.log(JSON.stringify(rawPlaces[0], null, 2));
     } else {
-      console.log('[GooglePlacesProvider] Raw response body:', JSON.stringify(data, null, 2));
+      console.log(
+        '[GooglePlacesProvider] Raw response body:',
+        JSON.stringify(data, null, 2),
+      );
     }
-    console.log('=================================================================\n');
+    console.log(
+      '=================================================================\n',
+    );
 
     const items: NormalizedBusinessLead[] = rawPlaces.map((p) => {
       const name = p.displayName?.text || 'Unknown Business';
       const displayName = p.displayName?.text || name;
-      const phone = p.internationalPhoneNumber || p.nationalPhoneNumber || undefined;
+      const phone =
+        p.internationalPhoneNumber || p.nationalPhoneNumber || undefined;
       const phoneType = this.detectPhoneType(phone, params.country);
       const categories: string[] = Array.isArray(p.types) ? p.types : [];
 
@@ -162,7 +177,8 @@ export class GooglePlacesProvider implements LeadSourceProvider {
         latitude: p.location?.latitude,
         longitude: p.location?.longitude,
         rating: typeof p.rating === 'number' ? p.rating : 0,
-        reviewCount: typeof p.userRatingCount === 'number' ? p.userRatingCount : 0,
+        reviewCount:
+          typeof p.userRatingCount === 'number' ? p.userRatingCount : 0,
         rawMetadata: {
           types: p.types,
         },
@@ -170,7 +186,9 @@ export class GooglePlacesProvider implements LeadSourceProvider {
     });
 
     // Google Places TextSearch is ~$0.032 per request (Places Text Search SKU)
-    const estimatedCostUsd = 0.032;
+    // Text Search Enterprise (phone/website/rating fields), per call after the
+    // free monthly amount: $10.50 per 1,000 on the India price list, $35 globally.
+    const estimatedCostUsd = Number(this.configService.get<string>('GOOGLE_PLACES_COST_PER_CALL_USD') || '0.0105');
 
     return {
       items,

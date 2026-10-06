@@ -1,6 +1,9 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
-import { ProformaInvoice, ProformaInvoiceSchema } from './schemas/proforma-invoice.schema';
+import {
+  ProformaInvoice,
+  ProformaInvoiceSchema,
+} from './schemas/proforma-invoice.schema';
 import { ProformaInvoicesService } from './proforma-invoices.service';
 import { ProformaPdfService } from './proforma-pdf.service';
 import { ProformaInvoicesController } from './proforma-invoices.controller';

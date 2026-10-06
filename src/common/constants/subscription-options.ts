@@ -1,7 +1,8 @@
 export const SUBSCRIPTION_TIERS = ['reminders', 'invoicing', 'combo'] as const;
 export type SubscriptionTier = (typeof SUBSCRIPTION_TIERS)[number];
 
-export const TEAM_SEAT_LIMIT = 5;
+// Combo + Team: the free test seat plus 3 more.
+export const TEAM_SEAT_LIMIT = 4;
 
 // Lifetime caps (not per-year, never reset) for a business without an active
 // Invoicing/Combo subscription — purchasing Invoicing/Combo removes both caps.
@@ -41,34 +42,42 @@ export function getPlanPricing(
 ): PlanPricing {
   const currency = currencyCode.toUpperCase();
   if (currency === 'AED') {
-    if (tier === 'combo') return { amount: teamEnabled ? 119 : 79, currency: 'AED' };
+    if (tier === 'combo')
+      return { amount: teamEnabled ? 119 : 79, currency: 'AED' };
     return { amount: 49, currency: 'AED' };
   }
   if (currency === 'SAR') {
-    if (tier === 'combo') return { amount: teamEnabled ? 119 : 79, currency: 'SAR' };
+    if (tier === 'combo')
+      return { amount: teamEnabled ? 119 : 79, currency: 'SAR' };
     return { amount: 49, currency: 'SAR' };
   }
   if (currency === 'QAR') {
-    if (tier === 'combo') return { amount: teamEnabled ? 119 : 79, currency: 'QAR' };
+    if (tier === 'combo')
+      return { amount: teamEnabled ? 119 : 79, currency: 'QAR' };
     return { amount: 49, currency: 'QAR' };
   }
   if (currency === 'OMR') {
-    if (tier === 'combo') return { amount: teamEnabled ? 12 : 8, currency: 'OMR' };
+    if (tier === 'combo')
+      return { amount: teamEnabled ? 12 : 8, currency: 'OMR' };
     return { amount: 5, currency: 'OMR' };
   }
   if (currency === 'KWD') {
-    if (tier === 'combo') return { amount: teamEnabled ? 10 : 6, currency: 'KWD' };
+    if (tier === 'combo')
+      return { amount: teamEnabled ? 10 : 6, currency: 'KWD' };
     return { amount: 4, currency: 'KWD' };
   }
   if (currency === 'BHD') {
-    if (tier === 'combo') return { amount: teamEnabled ? 12 : 8, currency: 'BHD' };
+    if (tier === 'combo')
+      return { amount: teamEnabled ? 12 : 8, currency: 'BHD' };
     return { amount: 5, currency: 'BHD' };
   }
   if (currency === 'USD') {
-    if (tier === 'combo') return { amount: teamEnabled ? 35 : 25, currency: 'USD' };
+    if (tier === 'combo')
+      return { amount: teamEnabled ? 35 : 25, currency: 'USD' };
     return { amount: 15, currency: 'USD' };
   }
-  if (tier === 'combo') return { amount: teamEnabled ? 1499 : 999, currency: 'INR' };
+  if (tier === 'combo')
+    return { amount: teamEnabled ? 1499 : 999, currency: 'INR' };
   return { amount: 699, currency: 'INR' };
 }
 
@@ -111,33 +120,41 @@ export function getAppStorePricing(
 ): PlanPricing {
   const currency = currencyCode.toUpperCase();
   if (currency === 'AED') {
-    if (tier === 'combo') return { amount: teamEnabled ? 140 : 95, currency: 'AED' };
+    if (tier === 'combo')
+      return { amount: teamEnabled ? 140 : 95, currency: 'AED' };
     return { amount: 60, currency: 'AED' };
   }
   if (currency === 'SAR') {
-    if (tier === 'combo') return { amount: teamEnabled ? 140 : 95, currency: 'SAR' };
+    if (tier === 'combo')
+      return { amount: teamEnabled ? 140 : 95, currency: 'SAR' };
     return { amount: 60, currency: 'SAR' };
   }
   if (currency === 'QAR') {
-    if (tier === 'combo') return { amount: teamEnabled ? 140 : 95, currency: 'QAR' };
+    if (tier === 'combo')
+      return { amount: teamEnabled ? 140 : 95, currency: 'QAR' };
     return { amount: 60, currency: 'QAR' };
   }
   if (currency === 'OMR') {
-    if (tier === 'combo') return { amount: teamEnabled ? 15 : 10, currency: 'OMR' };
+    if (tier === 'combo')
+      return { amount: teamEnabled ? 15 : 10, currency: 'OMR' };
     return { amount: 6, currency: 'OMR' };
   }
   if (currency === 'KWD') {
-    if (tier === 'combo') return { amount: teamEnabled ? 12 : 8, currency: 'KWD' };
+    if (tier === 'combo')
+      return { amount: teamEnabled ? 12 : 8, currency: 'KWD' };
     return { amount: 5, currency: 'KWD' };
   }
   if (currency === 'BHD') {
-    if (tier === 'combo') return { amount: teamEnabled ? 15 : 10, currency: 'BHD' };
+    if (tier === 'combo')
+      return { amount: teamEnabled ? 15 : 10, currency: 'BHD' };
     return { amount: 6, currency: 'BHD' };
   }
   if (currency === 'USD') {
-    if (tier === 'combo') return { amount: teamEnabled ? 42 : 30, currency: 'USD' };
+    if (tier === 'combo')
+      return { amount: teamEnabled ? 42 : 30, currency: 'USD' };
     return { amount: 18, currency: 'USD' };
   }
-  if (tier === 'combo') return { amount: teamEnabled ? 1799 : 1199, currency: 'INR' };
+  if (tier === 'combo')
+    return { amount: teamEnabled ? 1799 : 1199, currency: 'INR' };
   return { amount: 899, currency: 'INR' };
 }

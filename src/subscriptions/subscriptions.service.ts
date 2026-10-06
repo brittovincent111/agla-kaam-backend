@@ -229,16 +229,22 @@ export class SubscriptionsService {
     if (!identifier || identifier.trim().length < 3) {
       return { exists: false };
     }
-    const business = await this.businessesService.findByPhoneOrEmail(identifier);
+    const business =
+      await this.businessesService.findByPhoneOrEmail(identifier);
     if (!business) {
       return { exists: false };
     }
+    // Masked. This endpoint is unauthenticated by necessity — a website
+    // visitor paying for a plan is not logged in — so it must confirm "yes,
+    // this account exists" for someone who already knows the identifier,
+    // without handing back contact details to anyone who guesses one.
+    // country/currency stay whole: they carry no personal information and
+    // the checkout needs them to price the order.
     return {
       exists: true,
       businessName: business.name,
-      phone: business.phone,
-      email: business.email,
-      tradeType: business.tradeType,
+      phone: maskPhone(business.phone),
+      email: maskEmail(business.email),
       country: business.country,
       currency: business.currency || 'INR',
     };
@@ -257,7 +263,8 @@ export class SubscriptionsService {
     tier: SubscriptionTier,
     teamEnabled = false,
   ): Promise<CreatedOrder> {
-    const business = await this.businessesService.findByPhoneOrEmail(identifier);
+    const business =
+      await this.businessesService.findByPhoneOrEmail(identifier);
     if (!business) {
       throw new NotFoundException(
         "We couldn't find an Agla Kaam account with that phone number or email. Download the app and create an account first, then come back here to subscribe.",
@@ -458,10 +465,15 @@ export class SubscriptionsService {
     const transactionId =
       await this.appleVerificationService.extractTransactionId(purchaseToken);
 
+    // Already processed this exact transaction (a retried client call, or a
+    // restore re-posting what is already on file).
     const existing = await this.applePurchaseModel
-      .findOne({ transactionId })
+      .findOne({
+        $or: [{ transactionId }, { latestTransactionId: transactionId }],
+      })
       .exec();
     if (existing) {
+      this.assertSameAppleBusiness(existing, businessId);
       return { status: 'active' };
     }
 
@@ -486,6 +498,34 @@ export class SubscriptionsService {
       );
     }
 
+    // A renewal or plan change of a subscription already on file (restore,
+    // or an unfinished transaction replayed at app start) has a new
+    // transactionId but the same originalTransactionId — update that row
+    // instead of starting a second subscription for the same payment.
+    const originalTransactionId =
+      verification.originalTransactionId ?? transactionId;
+    const linked = await this.findApplePurchaseBySubscription(
+      originalTransactionId,
+    );
+    if (linked) {
+      this.assertSameAppleBusiness(linked, businessId);
+      linked.originalTransactionId = originalTransactionId;
+      linked.latestTransactionId = transactionId;
+      linked.productId = productId;
+      linked.tier = mapped.tier;
+      linked.teamEnabled = mapped.teamEnabled;
+      await linked.save();
+      await this.applyStoreState({
+        businessId,
+        tier: mapped.tier,
+        teamEnabled: mapped.teamEnabled,
+        isActive: true,
+        expiresAt: verification.expiresAt,
+        source: 'Apple(verify)',
+      });
+      return { status: 'active' };
+    }
+
     try {
       await this.applePurchaseModel.create({
         businessId,
@@ -493,6 +533,8 @@ export class SubscriptionsService {
         teamEnabled: mapped.teamEnabled,
         productId,
         transactionId,
+        originalTransactionId,
+        latestTransactionId: transactionId,
       });
     } catch (err) {
       // Concurrent duplicate call raced past the findOne check above — the
@@ -539,7 +581,10 @@ export class SubscriptionsService {
 
     let payload: {
       packageName?: string;
-      subscriptionNotification?: { purchaseToken?: string; notificationType?: number };
+      subscriptionNotification?: {
+        purchaseToken?: string;
+        notificationType?: number;
+      };
       testNotification?: unknown;
     };
     try {
@@ -563,7 +608,9 @@ export class SubscriptionsService {
   // Re-verifies one Play purchase token and brings the local subscription
   // into line with whatever Google now says.
   async syncPlayPurchase(purchaseToken: string): Promise<void> {
-    const record = await this.playPurchaseModel.findOne({ purchaseToken }).exec();
+    const record = await this.playPurchaseModel
+      .findOne({ purchaseToken })
+      .exec();
     if (!record) {
       // A token we never activated — nothing to keep in sync.
       this.logger.warn('Play notification for an unknown purchase token.');
@@ -595,41 +642,115 @@ export class SubscriptionsService {
       return;
     }
 
-    const transactionId =
-      await this.appleVerificationService.extractNotificationTransactionId(
+    const transaction =
+      await this.appleVerificationService.extractNotificationTransaction(
         signedPayload,
       );
-    if (!transactionId) return;
+    if (!transaction) return;
 
-    await this.syncApplePurchase(transactionId);
+    await this.syncApplePurchase(
+      transaction.transactionId,
+      transaction.originalTransactionId,
+    );
   }
 
-  async syncApplePurchase(transactionId: string): Promise<void> {
-    const record = await this.applePurchaseModel
-      .findOne({ transactionId })
-      .exec();
+  // Apple issues a NEW transactionId for every renewal, so a renewal never
+  // matches the row written at purchase time by transactionId alone. The
+  // originalTransactionId is what stays constant, so that is the lookup;
+  // the exact transactionId is only a fallback for a notification that
+  // somehow lacks it.
+  async syncApplePurchase(
+    transactionId: string,
+    originalTransactionId?: string,
+  ): Promise<void> {
+    const record =
+      (originalTransactionId
+        ? await this.findApplePurchaseBySubscription(originalTransactionId)
+        : null) ??
+      (await this.applePurchaseModel
+        .findOne({
+          $or: [{ transactionId }, { latestTransactionId: transactionId }],
+        })
+        .exec());
     if (!record) {
-      // Apple issues a NEW transaction id for each renewal, so the renewal
-      // will not match the original purchase row. Fall back to the most
-      // recent Apple purchase for the same product, which is the same
-      // subscription being renewed.
       this.logger.warn(
-        `Apple notification for unknown transaction ${transactionId} — cannot map to a business.`,
+        `Apple notification for unknown transaction ${transactionId} (original ${
+          originalTransactionId ?? 'unknown'
+        }) — cannot map to a business.`,
       );
       return;
     }
 
     const verification =
       await this.appleVerificationService.verifyTransaction(transactionId);
+    if (!verification.productId) {
+      // Apple's API could not be reached or did not recognise the id — that
+      // says nothing about the subscription, so leave it as it is rather
+      // than expiring a paying customer on a transient failure.
+      this.logger.warn(
+        `Apple notification: could not verify transaction ${transactionId} — left unchanged.`,
+      );
+      return;
+    }
+
+    // A plan change inside the subscription group keeps the
+    // originalTransactionId but moves the productId, so the tier comes from
+    // what Apple says now, not what was bought first.
+    const mapped = SUBSCRIPTION_PRODUCT_IDS[verification.productId];
+    const tier = mapped?.tier ?? record.tier;
+    const teamEnabled = mapped?.teamEnabled ?? record.teamEnabled;
+
+    if (!record.originalTransactionId) {
+      record.originalTransactionId =
+        verification.originalTransactionId ?? originalTransactionId;
+    }
+    if (verification.isActive) {
+      record.latestTransactionId = verification.transactionId;
+      record.productId = verification.productId;
+      record.tier = tier;
+      record.teamEnabled = teamEnabled;
+    }
+    await record.save();
 
     await this.applyStoreState({
       businessId: record.businessId.toString(),
-      tier: record.tier,
-      teamEnabled: record.teamEnabled,
+      tier,
+      teamEnabled,
       isActive: verification.isActive,
+      revoked: verification.revoked,
       expiresAt: verification.expiresAt,
-      source: 'Apple',
+      source: verification.revoked ? 'Apple(revoked)' : 'Apple',
     });
+  }
+
+  // The purchase row for one App Store subscription, by its
+  // originalTransactionId. Rows written before that was stored only have
+  // transactionId — which, for the first purchase, is the original id.
+  private findApplePurchaseBySubscription(
+    originalTransactionId: string,
+  ): Promise<ApplePurchaseDocument | null> {
+    return this.applePurchaseModel
+      .findOne({
+        $or: [
+          { originalTransactionId },
+          { transactionId: originalTransactionId },
+        ],
+      })
+      .exec();
+  }
+
+  // One Apple ID's subscription pays for one business. Without this a
+  // second account signed in on the same device could "restore" the same
+  // purchase and get a paid plan for free.
+  private assertSameAppleBusiness(
+    record: ApplePurchaseDocument,
+    businessId: string,
+  ): void {
+    if (record.businessId.toString() !== businessId) {
+      throw new ForbiddenException(
+        'This App Store subscription is already linked to another Agla Kaam account.',
+      );
+    }
   }
 
   // Writes the store's verdict onto the business's current subscription:
@@ -640,6 +761,8 @@ export class SubscriptionsService {
     tier: SubscriptionTier;
     teamEnabled: boolean;
     isActive: boolean;
+    // Refunded/revoked by the store: access ends now, not at expiresAt.
+    revoked?: boolean;
     expiresAt?: Date;
     source: string;
   }): Promise<void> {
@@ -674,9 +797,12 @@ export class SubscriptionsService {
 
     // Not active any more. Only downgrade once the paid period has actually
     // elapsed — a cancellation mid-term still entitles the customer to the
-    // rest of what they paid for.
+    // rest of what they paid for. A refund is different: the money went
+    // back, so nothing is still paid for and access ends immediately.
     const stillPaidFor =
-      params.expiresAt && params.expiresAt.getTime() > Date.now();
+      !params.revoked &&
+      params.expiresAt &&
+      params.expiresAt.getTime() > Date.now();
     if (stillPaidFor) {
       if (current) {
         current.renewalDate = params.expiresAt;
@@ -690,14 +816,17 @@ export class SubscriptionsService {
 
     if (current && current.status !== 'expired') {
       current.status = 'expired';
-      if (params.expiresAt) current.renewalDate = params.expiresAt;
+      if (params.revoked) current.renewalDate = new Date();
+      else if (params.expiresAt) current.renewalDate = params.expiresAt;
       await current.save();
     }
     await this.businessesService.updateSubscriptionStatus(
       params.businessId,
       'expired',
     );
-    this.logger.log(`${params.source}: subscription expired for ${params.businessId}`);
+    this.logger.log(
+      `${params.source}: subscription expired for ${params.businessId}`,
+    );
   }
 
   private getRazorpayClient(): Razorpay {
@@ -716,4 +845,21 @@ export class SubscriptionsService {
     }
     return this.razorpayClient;
   }
+}
+
+/** "+919876500001" -> "+91 ••••• 0001" — enough to recognise, not to dial. */
+function maskPhone(phone?: string): string | undefined {
+  if (!phone) return undefined;
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length < 4) return '••••';
+  return `••••••${digits.slice(-4)}`;
+}
+
+/** "brittovincent@gmail.com" -> "b••••••••t@gmail.com". */
+function maskEmail(email?: string): string | undefined {
+  if (!email) return undefined;
+  const [user, domain] = email.split('@');
+  if (!domain) return '••••';
+  if (user.length <= 2) return `${user[0] ?? ''}••@${domain}`;
+  return `${user[0]}${'•'.repeat(Math.min(user.length - 2, 8))}${user.at(-1)}@${domain}`;
 }

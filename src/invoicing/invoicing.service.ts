@@ -1,4 +1,16 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { dateRangeFilter } from '../common/pagination/date-range';
+import {
+  SortSpec,
+  amountRangeFilter,
+  cursorValue,
+  splitList,
+} from '../common/pagination/list-options';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Invoice, InvoiceDocument } from './schemas/invoice.schema';
@@ -15,7 +27,10 @@ import {
   calculateInvoiceTotals,
   computeDisplayStatus,
 } from '../common/constants/invoice-options';
-import { FREE_TIER_INVOICE_LIMIT, tierHasInvoicing } from '../common/constants/subscription-options';
+import {
+  FREE_TIER_INVOICE_LIMIT,
+  tierHasInvoicing,
+} from '../common/constants/subscription-options';
 import {
   Page,
   andFilters,
@@ -40,12 +55,15 @@ function addDays(date: Date, days: number): Date {
 }
 
 import { InventoryService } from '../inventory/inventory.service';
+import { InventoryItem } from '../inventory/schemas/inventory-item.schema';
 
 @Injectable()
 export class InvoicingService {
   constructor(
-    @InjectModel(Invoice.name) private readonly invoiceModel: Model<InvoiceDocument>,
-    @InjectModel(Payment.name) private readonly paymentModel: Model<PaymentDocument>,
+    @InjectModel(Invoice.name)
+    private readonly invoiceModel: Model<InvoiceDocument>,
+    @InjectModel(Payment.name)
+    private readonly paymentModel: Model<PaymentDocument>,
     private readonly customersService: CustomersService,
     private readonly servicesService: ServicesService,
     private readonly subscriptionsService: SubscriptionsService,
@@ -53,11 +71,17 @@ export class InvoicingService {
     private readonly inventoryService: InventoryService,
   ) {}
 
-  private withDisplayStatus(invoice: InvoiceDocument): Invoice & { _id: Types.ObjectId } {
+  private withDisplayStatus(
+    invoice: InvoiceDocument,
+  ): Invoice & { _id: Types.ObjectId } {
     const plain = invoice.toObject();
     return {
       ...plain,
-      status: computeDisplayStatus(plain.status, plain.dueDate, plain.balanceDue),
+      status: computeDisplayStatus(
+        plain.status,
+        plain.dueDate,
+        plain.balanceDue,
+      ),
     };
   }
 
@@ -75,19 +99,29 @@ export class InvoicingService {
     return `${prefix}${new Date().getFullYear()}-${String(serial).padStart(3, '0')}`;
   }
 
-  private async buildItems(businessId: string, customerId: string, dtoItems: CreateInvoiceDto['items']) {
+  private async buildItems(
+    businessId: string,
+    customerId: string,
+    dtoItems: CreateInvoiceDto['items'],
+  ) {
     return Promise.all(
       dtoItems.map(async (item) => {
         if (item.serviceId) {
           // Confirms the referenced service actually belongs to this
           // business/customer before it can be billed.
-          const service = await this.servicesService.findOne(businessId, item.serviceId);
+          const service = await this.servicesService.findOne(
+            businessId,
+            item.serviceId,
+          );
           if (service.customerId.toString() !== customerId) {
-            throw new BadRequestException('Service does not belong to the selected customer');
+            throw new BadRequestException(
+              'Service does not belong to the selected customer',
+            );
           }
         }
         const taxRate = item.taxRate ?? 0;
-        const amount = Math.round((item.quantity * item.rate + Number.EPSILON) * 100) / 100;
+        const amount =
+          Math.round((item.quantity * item.rate + Number.EPSILON) * 100) / 100;
         // Placeholder only. The real per-line tax depends on this line's share
         // of the invoice-level discount, which is not known until every line
         // is priced — applyLineTax() below overwrites it from
@@ -108,7 +142,10 @@ export class InvoicingService {
     );
   }
 
-  async create(businessId: string, dto: CreateInvoiceDto): Promise<InvoiceDocument> {
+  async create(
+    businessId: string,
+    dto: CreateInvoiceDto,
+  ): Promise<InvoiceDocument> {
     const tier = await this.subscriptionsService.getActiveTier(businessId);
     if (!tierHasInvoicing(tier)) {
       const count = await this.invoiceModel
@@ -131,17 +168,18 @@ export class InvoicingService {
     const items = await this.buildItems(businessId, dto.customerId, dto.items);
     const totals = calculateInvoiceTotals(items, dto.discount ?? 0);
     applyLineTax(items, totals);
-    const invoiceDate = dto.invoiceDate ? new Date(dto.invoiceDate) : new Date();
-    const dueDate = dto.dueDate ? new Date(dto.dueDate) : addDays(invoiceDate, DEFAULT_PAYMENT_TERM_DAYS);
-    const invoiceNumber = await this.nextInvoiceNumber(businessId);
-
-    const created = await this.invoiceModel.create({
+    const invoiceDate = dto.invoiceDate
+      ? new Date(dto.invoiceDate)
+      : new Date();
+    const dueDate = dto.dueDate
+      ? new Date(dto.dueDate)
+      : addDays(invoiceDate, DEFAULT_PAYMENT_TERM_DAYS);
+    const fields = {
       businessId,
       customerId: dto.customerId,
-      invoiceNumber,
       invoiceDate,
       dueDate,
-      status: 'draft',
+      status: 'draft' as const,
       currency: business.currency || 'INR',
       taxType: business.taxType || 'gst',
       items,
@@ -154,30 +192,92 @@ export class InvoicingService {
       notes: dto.notes,
       paymentTerms: dto.paymentTerms,
       termsAndConditions: dto.termsAndConditions,
-    });
+    };
 
-    try {
-      const inventoryItems = await this.inventoryService.findAll(businessId);
-      for (const item of dto.items) {
-        const match = inventoryItems.find(
-          (inv) => inv.name.trim().toLowerCase() === item.name.trim().toLowerCase(),
-        );
-        if (match && !match.isService) {
-          await this.inventoryService.adjustStock(
-            businessId,
-            (match as any)._id.toString(),
-            -item.quantity,
-          );
+    // A number that is already taken (the counter was set behind numbers in
+    // use) fails on the unique {businessId, invoiceNumber} index. allocateSerial
+    // is atomic, so one more allocation moves past the collision instead of
+    // surfacing a raw 500.
+    //
+    // Stock is not touched here: a draft has not been billed. It moves when
+    // the invoice is sent — see send().
+    for (let attempt = 0; ; attempt++) {
+      const invoiceNumber = await this.nextInvoiceNumber(businessId);
+      try {
+        return await this.invoiceModel.create({ ...fields, invoiceNumber });
+      } catch (err) {
+        const e = err as {
+          code?: number;
+          keyPattern?: Record<string, unknown>;
+        };
+        if (attempt === 0 && e?.code === 11000 && e.keyPattern?.invoiceNumber) {
+          continue;
         }
+        throw err;
       }
-    } catch {
-      // Stock adjustment fails gracefully if matching item isn't tracked
     }
-
-    return created;
   }
 
-  async findOne(businessId: string, invoiceId: string): Promise<InvoiceDocument> {
+  /**
+   * Takes the invoice's goods out of the inventory catalogue, matching lines
+   * to tracked items by name (invoice lines carry no item id). Returns what
+   * was taken, for cancel() to put back.
+   *
+   * Best-effort per line: an item deleted from the catalogue, or a name that
+   * matches nothing, must not stop an invoice from being sent.
+   */
+  private async deductStock(
+    businessId: string,
+    items: { name: string; quantity: number }[],
+  ): Promise<{ itemId: string; quantity: number }[]> {
+    const deductions: { itemId: string; quantity: number }[] = [];
+    let catalogue: InventoryItem[];
+    try {
+      catalogue = await this.inventoryService.findAll(businessId);
+    } catch {
+      return deductions;
+    }
+    for (const item of items) {
+      const match = catalogue.find(
+        (inv) =>
+          inv.name.trim().toLowerCase() === item.name.trim().toLowerCase(),
+      );
+      if (!match || match.isService) continue;
+      const itemId = (
+        match as unknown as { _id: Types.ObjectId }
+      )._id.toString();
+      try {
+        await this.inventoryService.adjustStock(
+          businessId,
+          itemId,
+          -item.quantity,
+        );
+        deductions.push({ itemId, quantity: item.quantity });
+      } catch {
+        // Not tracked any more — nothing to deduct.
+      }
+    }
+    return deductions;
+  }
+
+  // Puts back what deductStock() took. Same best-effort rule.
+  private async restoreStock(
+    businessId: string,
+    deductions: { itemId: string; quantity: number }[] | undefined,
+  ): Promise<void> {
+    for (const { itemId, quantity } of deductions ?? []) {
+      try {
+        await this.inventoryService.adjustStock(businessId, itemId, quantity);
+      } catch {
+        // The item has since been deleted from the catalogue.
+      }
+    }
+  }
+
+  async findOne(
+    businessId: string,
+    invoiceId: string,
+  ): Promise<InvoiceDocument> {
     if (!Types.ObjectId.isValid(invoiceId)) {
       throw new NotFoundException('Invoice not found');
     }
@@ -186,6 +286,61 @@ export class InvoicingService {
       throw new NotFoundException('Invoice not found');
     }
     return invoice;
+  }
+
+  /**
+   * One customer's billing at a glance, over every invoice — the customer
+   * screen used to add up only the three it had loaded, so a customer with
+   * twenty invoices showed the total of the latest three. Drafts and
+   * cancelled invoices are not money billed, so they are left out.
+   */
+  async customerSummary(businessId: string, customerId: string) {
+    const [row] = await this.invoiceModel
+      .aggregate<{ invoiced: number; outstanding: number; count: number }>([
+        {
+          $match: {
+            businessId: idFilter(businessId),
+            customerId: idFilter(customerId),
+            status: { $nin: ['draft', 'cancelled'] },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            invoiced: { $sum: '$total' },
+            outstanding: { $sum: '$balanceDue' },
+            count: { $sum: 1 },
+          },
+        },
+      ])
+      .exec();
+    const round = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+    return {
+      invoiced: round(row?.invoiced ?? 0),
+      outstanding: round(row?.outstanding ?? 0),
+      count: row?.count ?? 0,
+    };
+  }
+
+  // The latest live invoice that bills this job (drafts included: "invoice
+  // started"), for the completed job's checklist and its WhatsApp message.
+  async findLatestForService(businessId: string, serviceId: string) {
+    const invoice = await this.invoiceModel
+      .findOne({
+        businessId: idFilter(businessId),
+        'items.serviceId': idFilter(serviceId),
+        status: { $ne: 'cancelled' },
+      })
+      .sort({ createdAt: -1 })
+      .exec();
+    return invoice ? this.withDisplayStatus(invoice) : null;
+  }
+
+  async markReminded(businessId: string, invoiceId: string): Promise<void> {
+    const invoice = await this.findOne(businessId, invoiceId);
+    await this.invoiceModel
+      .updateOne({ _id: invoice._id }, { $set: { lastRemindedAt: new Date() } })
+      .exec();
   }
 
   async findOneWithDisplayStatus(businessId: string, invoiceId: string) {
@@ -202,11 +357,15 @@ export class InvoicingService {
     if (filters.customerId) {
       query.customerId = filters.customerId;
     }
-    if (filters.status && filters.status !== 'all' && filters.status !== 'overdue') {
+    if (
+      filters.status &&
+      filters.status !== 'all' &&
+      filters.status !== 'overdue'
+    ) {
       query.status = filters.status;
     }
 
-    let invoices = await this.invoiceModel
+    const invoices = await this.invoiceModel
       .find(query)
       .sort({ invoiceDate: -1 })
       .populate('customerId')
@@ -221,7 +380,10 @@ export class InvoicingService {
     if (filters.search) {
       const q = filters.search.trim().toLowerCase();
       withStatus = withStatus.filter((invoice) => {
-        const customer = invoice.customerId as unknown as { name?: string; phone?: string };
+        const customer = invoice.customerId as unknown as {
+          name?: string;
+          phone?: string;
+        };
         return (
           invoice.invoiceNumber.toLowerCase().includes(q) ||
           customer?.name?.toLowerCase().includes(q) ||
@@ -247,10 +409,17 @@ export class InvoicingService {
       status?: string;
       search?: string;
       customerId?: string;
+      from?: string;
+      to?: string;
+      minAmount?: number;
+      maxAmount?: number;
+      sort?: string;
       limit?: number;
       cursor?: string;
     },
-  ): Promise<Page<Invoice & { _id: Types.ObjectId }>> {
+  ): Promise<
+    Page<Invoice & { _id: Types.ObjectId }> & { summary?: ListMoneySummary }
+  > {
     const limit = clampLimit(options.limit);
     const cursor = decodePageCursor(options.cursor);
 
@@ -262,32 +431,85 @@ export class InvoicingService {
         )
       : [];
 
+    const pickedCustomers = splitList(options.customerId);
+    const narrowing = [
+      pickedCustomers.length ? { customerId: idsFilter(pickedCustomers) } : {},
+      this.statusFilter(options.status),
+      numberOrCustomerFilter(
+        options.search,
+        'invoiceNumber',
+        customerIds,
+        idsFilter,
+      ),
+      dateRangeFilter('invoiceDate', options.from, options.to),
+      amountRangeFilter('total', options.minAmount, options.maxAmount),
+    ];
+    const sort =
+      INVOICE_SORTS[options.sort ?? 'newest'] ?? INVOICE_SORTS.newest;
     const filter = andFilters(
       { businessId },
-      options.customerId ? { customerId: idFilter(options.customerId) } : {},
-      this.statusFilter(options.status),
-      numberOrCustomerFilter(options.search, 'invoiceNumber', customerIds, idsFilter),
-      pageCursorFilter(cursor, 'invoiceDate', 'desc'),
+      ...narrowing,
+      pageCursorFilter(cursor, sort.field, sort.direction),
     );
 
     const [rows, total] = await Promise.all([
       this.invoiceModel
         .find(filter)
-        .sort(pageSort('invoiceDate', 'desc'))
+        .sort(pageSort(sort.field, sort.direction))
         .limit(limit + 1)
         .populate('customerId', 'name phone')
         .exec(),
-      cursor ? Promise.resolve(undefined) : this.invoiceModel.countDocuments(filter).exec(),
+      cursor
+        ? Promise.resolve(undefined)
+        : this.invoiceModel.countDocuments(filter).exec(),
     ]);
+    // The money behind what the list shows, once per list (first page):
+    // "₹84,500 billed · ₹12,300 due". Aggregation does not cast ids, so the
+    // business is matched in both stored forms.
+    const summary = cursor
+      ? undefined
+      : await this.moneySummary(
+          andFilters({ businessId: idFilter(businessId) }, ...narrowing),
+        );
 
-    const page = buildPage(rows, limit, (row) => ({
-      v: row.invoiceDate.toISOString(),
-      id: (row._id as { toString(): string }).toString(),
-    }), total);
+    const page = buildPage(
+      rows,
+      limit,
+      (row) => ({
+        v: cursorValue(row as unknown as Record<string, unknown>, sort),
+        id: (row._id as { toString(): string }).toString(),
+      }),
+      total,
+    );
 
     // The display status is derived at read time, so it is applied to the
     // page rather than filtered on afterwards — see statusFilter.
-    return { ...page, items: page.items.map((row) => this.withDisplayStatus(row)) };
+    return {
+      ...page,
+      items: page.items.map((row) => this.withDisplayStatus(row)),
+      ...(summary ? { summary } : {}),
+    };
+  }
+
+  // Drafts are not billed yet and cancelled invoices never will be, so
+  // neither counts toward the money — they still count in the list.
+  private async moneySummary(
+    filter: Record<string, unknown>,
+  ): Promise<ListMoneySummary> {
+    const [row] = await this.invoiceModel
+      .aggregate<{ billed: number; due: number }>([
+        { $match: filter },
+        { $match: { status: { $nin: ['draft', 'cancelled'] } } },
+        {
+          $group: {
+            _id: null,
+            billed: { $sum: '$total' },
+            due: { $sum: '$balanceDue' },
+          },
+        },
+      ])
+      .exec();
+    return { billed: row?.billed ?? 0, due: row?.due ?? 0 };
   }
 
   // 'overdue' is never stored — it is what an unpaid or part-paid invoice
@@ -307,9 +529,14 @@ export class InvoicingService {
     // The stored statuses that *would* read as overdue are excluded from
     // their own bucket, so "unpaid" and "overdue" do not both claim the same
     // invoice — which is exactly what the app shows on the two chips.
+    // "Unpaid" is everything still owed and not yet late — part-paid
+    // included. It used to match the stored 'unpaid' only, so an invoice the
+    // customer had paid half of sat in no chip but All: exactly the money
+    // someone chasing payments needs to see.
     if (status === 'unpaid' || status === 'partially_paid') {
       return {
-        status,
+        status:
+          status === 'unpaid' ? { $in: ['unpaid', 'partially_paid'] } : status,
         $or: [{ balanceDue: { $lte: 0 } }, { dueDate: { $gte: new Date() } }],
       };
     }
@@ -323,37 +550,58 @@ export class InvoicingService {
       .populate('customerId')
       .exec();
 
-    const withStatus = invoices.map((invoice) => this.withDisplayStatus(invoice));
-    const outstandingTotal = withStatus.reduce((sum, invoice) => sum + invoice.balanceDue, 0);
+    const withStatus = invoices.map((invoice) =>
+      this.withDisplayStatus(invoice),
+    );
+    const outstandingTotal = withStatus.reduce(
+      (sum, invoice) => sum + invoice.balanceDue,
+      0,
+    );
 
     return {
       count: withStatus.length,
-      outstandingTotal: Math.round((outstandingTotal + Number.EPSILON) * 100) / 100,
+      outstandingTotal:
+        Math.round((outstandingTotal + Number.EPSILON) * 100) / 100,
       upcoming: withStatus.slice(0, 3),
     };
   }
 
-  async update(businessId: string, invoiceId: string, dto: UpdateInvoiceDto): Promise<InvoiceDocument> {
+  async update(
+    businessId: string,
+    invoiceId: string,
+    dto: UpdateInvoiceDto,
+  ): Promise<InvoiceDocument> {
     const invoice = await this.findOne(businessId, invoiceId);
     if (invoice.status === 'cancelled') {
       throw new BadRequestException('Cannot edit a cancelled invoice');
     }
     if (invoice.status === 'paid') {
-      throw new BadRequestException('Cannot edit a fully paid invoice. Record a payment adjustment or delete payments first.');
+      throw new BadRequestException(
+        'Cannot edit a fully paid invoice. Record a payment adjustment or delete payments first.',
+      );
     }
 
     const customerId = invoice.customerId.toString();
     if (dto.items) {
-      invoice.items = (await this.buildItems(businessId, customerId, dto.items)) as any;
+      invoice.items = (await this.buildItems(
+        businessId,
+        customerId,
+        dto.items,
+      )) as any;
     }
     if (dto.invoiceDate) invoice.invoiceDate = new Date(dto.invoiceDate);
     if (dto.dueDate) invoice.dueDate = new Date(dto.dueDate);
     if (dto.notes !== undefined) invoice.notes = dto.notes;
     if (dto.paymentTerms !== undefined) invoice.paymentTerms = dto.paymentTerms;
-    if (dto.termsAndConditions !== undefined) invoice.termsAndConditions = dto.termsAndConditions;
+    if (dto.termsAndConditions !== undefined)
+      invoice.termsAndConditions = dto.termsAndConditions;
 
     const totals = calculateInvoiceTotals(
-      invoice.items.map((item) => ({ quantity: item.quantity, rate: item.rate, taxRate: item.taxRate })),
+      invoice.items.map((item) => ({
+        quantity: item.quantity,
+        rate: item.rate,
+        taxRate: item.taxRate,
+      })),
       dto.discount ?? invoice.discount,
     );
     applyLineTax(invoice.items, totals);
@@ -361,7 +609,11 @@ export class InvoicingService {
     invoice.discount = totals.discount;
     invoice.taxTotal = totals.taxTotal;
     invoice.total = totals.total;
-    invoice.balanceDue = Math.max(0, Math.round((totals.total - invoice.amountPaid + Number.EPSILON) * 100) / 100);
+    invoice.balanceDue = Math.max(
+      0,
+      Math.round((totals.total - invoice.amountPaid + Number.EPSILON) * 100) /
+        100,
+    );
 
     if (invoice.amountPaid > 0) {
       invoice.status = invoice.balanceDue <= 0 ? 'paid' : 'partially_paid';
@@ -376,19 +628,194 @@ export class InvoicingService {
       throw new BadRequestException('Only draft invoices can be sent');
     }
     if (invoice.items.length === 0) {
-      throw new BadRequestException('Add at least one item before sending an invoice');
+      throw new BadRequestException(
+        'Add at least one item before sending an invoice',
+      );
     }
-    invoice.status = 'unpaid';
-    return invoice.save();
+    // Claimed atomically on the draft status, so two taps on Send cannot
+    // both deduct the stock.
+    const claimed = await this.invoiceModel
+      .findOneAndUpdate(
+        { _id: invoice._id, status: 'draft' },
+        { $set: { status: 'unpaid' } },
+        { new: true },
+      )
+      .exec();
+    if (!claimed) {
+      throw new BadRequestException('Only draft invoices can be sent');
+    }
+    // Sending is the point the goods are billed, so it is where they leave
+    // stock (a draft may never be sent, and can be deleted).
+    claimed.stockDeductions = await this.deductStock(businessId, claimed.items);
+    const sent = await claimed.save();
+    // Cash or UPI already taken at the door for these jobs goes on the
+    // invoice now, so the customer is not asked to pay it twice.
+    const serviceIds = sent.items
+      .map((i) => (i.serviceId ? i.serviceId.toString() : null))
+      .filter((id): id is string => !!id);
+    if (
+      serviceIds.length &&
+      (await this.applyJobCollections(businessId, serviceIds))
+    ) {
+      return this.findOne(businessId, invoiceId);
+    }
+    return sent;
   }
 
-  async cancel(businessId: string, invoiceId: string): Promise<InvoiceDocument> {
+  /**
+   * Corrects the payment a door collection put on an invoice — the owner
+   * fixing a mistyped amount. Capped like the original at what the invoice
+   * could take; zero removes the payment. The invoice's paid / due / status
+   * are recomputed in one atomic update, as for a new payment. Returns the
+   * amount now applied, or null when the payment was removed.
+   */
+  async adjustJobPayment(
+    businessId: string,
+    paymentId: string,
+    amount: number,
+    method: 'cash' | 'upi',
+  ): Promise<number | null> {
+    const payment = await this.paymentModel
+      .findOne({ _id: paymentId, businessId: idFilter(businessId) })
+      .exec();
+    if (!payment) return null;
+    const invoice = await this.invoiceModel
+      .findOne({ _id: payment.invoiceId, businessId: idFilter(businessId) })
+      .exec();
+    const room = invoice ? invoice.balanceDue + payment.amount : payment.amount;
+    const applied = Math.round(Math.max(0, Math.min(amount, room)) * 100) / 100;
+    const diff = Math.round((applied - payment.amount) * 100) / 100;
+
+    if (invoice && diff !== 0) {
+      await this.invoiceModel
+        .findOneAndUpdate(
+          { _id: invoice._id },
+          [
+            {
+              $set: {
+                amountPaid: {
+                  $round: [{ $max: [0, { $add: ['$amountPaid', diff] }] }, 2],
+                },
+              },
+            },
+            {
+              $set: {
+                balanceDue: {
+                  $max: [
+                    0,
+                    { $round: [{ $subtract: ['$total', '$amountPaid'] }, 2] },
+                  ],
+                },
+              },
+            },
+            {
+              $set: {
+                status: {
+                  $cond: [
+                    { $lte: ['$balanceDue', 0] },
+                    'paid',
+                    {
+                      $cond: [
+                        { $gt: ['$amountPaid', 0] },
+                        'partially_paid',
+                        'unpaid',
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
+          ],
+          { new: true, updatePipeline: true },
+        )
+        .exec();
+    }
+    if (applied <= 0) {
+      await payment.deleteOne();
+      return null;
+    }
+    payment.amount = applied;
+    payment.paymentMethod = method;
+    await payment.save();
+    return applied;
+  }
+
+  /**
+   * Records money a technician (or the owner) took at the door against the
+   * job's open invoice, once per job. Returns whether anything was recorded.
+   * Capped at what the invoice still owes; anything over stays on the job.
+   */
+  async applyJobCollections(
+    businessId: string,
+    serviceIds: string[],
+  ): Promise<boolean> {
+    let applied = false;
+    for (const serviceId of serviceIds) {
+      const invoice = await this.invoiceModel
+        .findOne({
+          businessId: idFilter(businessId),
+          'items.serviceId': idFilter(serviceId),
+          status: { $in: ['unpaid', 'partially_paid'] },
+          balanceDue: { $gt: 0 },
+        })
+        .sort({ invoiceDate: -1 })
+        .exec();
+      if (!invoice) continue;
+      const claim = await this.servicesService.claimCollection(
+        businessId,
+        serviceId,
+      );
+      if (!claim) continue;
+      try {
+        const amount = Math.min(claim.amount, invoice.balanceDue);
+        const { payment } = await this.recordPayment(
+          businessId,
+          invoice._id.toString(),
+          {
+            amount,
+            paymentMethod: claim.method,
+            paymentDate: claim.collectedAt.toISOString(),
+            notes: 'Collected at the job',
+          },
+        );
+        await this.servicesService.finishCollectionClaim(
+          serviceId,
+          payment._id.toString(),
+        );
+        applied = true;
+      } catch (err) {
+        await this.servicesService.finishCollectionClaim(serviceId, null);
+        throw err;
+      }
+    }
+    return applied;
+  }
+
+  async cancel(
+    businessId: string,
+    invoiceId: string,
+  ): Promise<InvoiceDocument> {
     const invoice = await this.findOne(businessId, invoiceId);
     if (invoice.status === 'paid' || invoice.status === 'cancelled') {
-      throw new BadRequestException(`Cannot cancel a ${invoice.status} invoice`);
+      throw new BadRequestException(
+        `Cannot cancel a ${invoice.status} invoice`,
+      );
     }
-    invoice.status = 'cancelled';
-    return invoice.save();
+    // Atomic, and the deductions are cleared in the same write, so a second
+    // cancel racing this one cannot put the stock back twice. The document
+    // returned is the one from before the update, holding what to restore.
+    const before = await this.invoiceModel
+      .findOneAndUpdate(
+        { _id: invoice._id, status: { $nin: ['paid', 'cancelled'] } },
+        { $set: { status: 'cancelled', stockDeductions: [] } },
+        { new: false },
+      )
+      .exec();
+    if (!before) {
+      throw new BadRequestException('This invoice can no longer be cancelled');
+    }
+    await this.restoreStock(businessId, before.stockDeductions);
+    return this.findOne(businessId, invoiceId);
   }
 
   async remove(businessId: string, invoiceId: string): Promise<void> {
@@ -397,12 +824,21 @@ export class InvoicingService {
       throw new ForbiddenException('Only draft invoices can be deleted');
     }
     await invoice.deleteOne();
+    // A draft has not moved stock (see send()), so this is normally empty;
+    // it is honoured in case one ever did.
+    await this.restoreStock(businessId, invoice.stockDeductions);
   }
 
-  async recordPayment(businessId: string, invoiceId: string, dto: RecordPaymentDto) {
+  async recordPayment(
+    businessId: string,
+    invoiceId: string,
+    dto: RecordPaymentDto,
+  ) {
     const invoice = await this.findOne(businessId, invoiceId);
     if (invoice.status === 'draft' || invoice.status === 'cancelled') {
-      throw new BadRequestException(`Cannot record a payment against a ${invoice.status} invoice`);
+      throw new BadRequestException(
+        `Cannot record a payment against a ${invoice.status} invoice`,
+      );
     }
 
     const payment = await this.paymentModel.create({
@@ -416,15 +852,78 @@ export class InvoicingService {
       notes: dto.notes,
     });
 
-    invoice.amountPaid = Math.round((invoice.amountPaid + dto.amount + Number.EPSILON) * 100) / 100;
-    invoice.balanceDue = Math.max(0, Math.round((invoice.total - invoice.amountPaid + Number.EPSILON) * 100) / 100);
-    invoice.status = invoice.balanceDue <= 0 ? 'paid' : 'partially_paid';
-    await invoice.save();
+    // Applied by the database in a single atomic update, not read-modify-save.
+    // Two payments recorded at the same moment both used to read the same
+    // amountPaid and write their own total over it, so one payment was
+    // recorded in the payments collection but silently lost from the invoice
+    // balance — the customer had paid and the invoice still said they owed it.
+    //
+    // Each pipeline stage sees the previous stage's output, so balanceDue and
+    // status are derived from the amountPaid this very update produced.
+    const updated = await this.invoiceModel
+      .findOneAndUpdate(
+        { _id: invoiceId, businessId },
+        [
+          {
+            $set: {
+              amountPaid: {
+                $round: [{ $add: ['$amountPaid', dto.amount] }, 2],
+              },
+            },
+          },
+          {
+            $set: {
+              balanceDue: {
+                $max: [
+                  0,
+                  { $round: [{ $subtract: ['$total', '$amountPaid'] }, 2] },
+                ],
+              },
+            },
+          },
+          {
+            $set: {
+              status: {
+                $cond: [{ $lte: ['$balanceDue', 0] }, 'paid', 'partially_paid'],
+              },
+            },
+          },
+        ],
+        // Mongoose 9 refuses an update written as a pipeline (the array
+        // above) unless told it is one — without this every payment 500'd
+        // after the payment row had already been saved.
+        { new: true, updatePipeline: true },
+      )
+      .exec();
 
-    return { invoice, payment };
+    if (!updated) {
+      throw new NotFoundException('Invoice not found');
+    }
+
+    return { invoice: updated, payment };
   }
 
-  findPaymentsForInvoice(businessId: string, invoiceId: string): Promise<PaymentDocument[]> {
-    return this.paymentModel.find({ businessId, invoiceId }).sort({ paymentDate: -1 }).exec();
+  findPaymentsForInvoice(
+    businessId: string,
+    invoiceId: string,
+  ): Promise<PaymentDocument[]> {
+    return this.paymentModel
+      .find({ businessId, invoiceId })
+      .sort({ paymentDate: -1 })
+      .exec();
   }
 }
+
+export interface ListMoneySummary {
+  billed: number;
+  due: number;
+}
+
+// The Filters sheet's sort choices. "dueDate" is oldest due date first —
+// the longest-waiting money at the top.
+const INVOICE_SORTS: Record<string, SortSpec> = {
+  newest: { field: 'invoiceDate', direction: 'desc', keyType: 'date' },
+  oldest: { field: 'invoiceDate', direction: 'asc', keyType: 'date' },
+  amount: { field: 'total', direction: 'desc', keyType: 'number' },
+  dueDate: { field: 'dueDate', direction: 'asc', keyType: 'date' },
+};

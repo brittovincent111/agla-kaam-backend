@@ -1,4 +1,10 @@
-import { Body, Controller, HttpCode, Post } from '@nestjs/common';
+import { Body, Controller, HttpCode, Post, UseGuards } from '@nestjs/common';
+import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import {
+  CurrentBusiness,
+  AuthenticatedBusiness,
+} from '../common/decorators/current-business.decorator';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { RegisterEmailDto } from './dto/register-email.dto';
@@ -42,7 +48,9 @@ export class AuthController {
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post('login-email')
   loginEmail(@Body() dto: LoginEmailDto) {
-    return this.authService.loginWithEmail(dto.email, dto.password);
+    return dto.phone
+      ? this.authService.loginWithPhone(dto.phone, dto.password)
+      : this.authService.loginWithEmail(dto.email!, dto.password);
   }
 
   // Less sensitive as a brute-force target (an attacker can't guess a
@@ -57,7 +65,11 @@ export class AuthController {
   @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Post('apple')
   apple(@Body() dto: AppleAuthDto) {
-    return this.authService.loginWithApple(dto.identityToken, dto.fullName);
+    return this.authService.loginWithApple(
+      dto.identityToken,
+      dto.fullName,
+      dto.authorizationCode,
+    );
   }
 
   // Deliberately tighter than login — each request sends a real email, so
@@ -86,5 +98,20 @@ export class AuthController {
   async resetPassword(@Body() dto: ResetPasswordDto) {
     await this.authService.resetPassword(dto.email, dto.code, dto.newPassword);
     return { message: 'Password reset. Log in with your new password.' };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @Post('change-password')
+  @HttpCode(204)
+  async changePassword(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Body() dto: ChangePasswordDto,
+  ) {
+    await this.authService.changePassword(
+      business,
+      dto.currentPassword,
+      dto.newPassword,
+    );
   }
 }

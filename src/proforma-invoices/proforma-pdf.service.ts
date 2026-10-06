@@ -21,6 +21,7 @@ import {
   taxTypeName,
 } from '../common/pdf/document-render';
 import { renderDocument } from '../common/pdf/render-document';
+import { resolveGstSupply } from '../common/pdf/place-of-supply';
 
 const STATUS_LABELS: Record<string, RenderStatus> = {
   draft: { label: 'DRAFT', tone: 'neutral' },
@@ -33,6 +34,7 @@ const STATUS_LABELS: Record<string, RenderStatus> = {
 // RenderBusiness stays free of per-document-type setting names. All optional,
 // and undefined means "show".
 type ProformaRenderBusiness = RenderBusiness & {
+  proformaTopMessage?: string;
   proformaShowDiscount?: boolean;
   proformaShowTax?: boolean;
   proformaShowBankInfo?: boolean;
@@ -66,7 +68,14 @@ export class ProformaPdfService {
       this.customersService.findOne(businessId, customerId),
     ]);
 
-    return this.render(business, customer, proforma, templateId, accentColor, geometry);
+    return this.render(
+      business,
+      customer,
+      proforma,
+      templateId,
+      accentColor,
+      geometry,
+    );
   }
 
   render(
@@ -88,14 +97,31 @@ export class ProformaPdfService {
       { label: 'Valid Until', value: formatDate(proforma.validUntil, country) },
     ];
 
-    const totals: RenderTotalRow[] = [{ label: 'Subtotal', value: proforma.subtotal }];
+    // Indian GST only: the state each party is in decides CGST + SGST versus
+    // IGST, and a tax invoice states its place of supply.
+    const supply = resolveGstSupply(taxType, country, business, customer);
+    if (supply?.placeOfSupply) {
+      metaRows.push({ label: 'Place of Supply', value: supply.placeOfSupply });
+    }
+
+    const totals: RenderTotalRow[] = [
+      { label: 'Subtotal', value: proforma.subtotal },
+    ];
     const showDiscount = business.proformaShowDiscount !== false;
     const showTax = business.proformaShowTax !== false;
     if (showDiscount && proforma.discount > 0) {
-      totals.push({ label: 'Discount', value: proforma.discount, negative: true });
+      totals.push({
+        label: 'Discount',
+        value: proforma.discount,
+        negative: true,
+      });
     }
     if (showTax) {
-      totals.push(...buildTaxRows(taxType, proforma.taxTotal, proforma.items));
+      totals.push(
+        ...buildTaxRows(taxType, proforma.taxTotal, proforma.items, {
+          interState: supply?.interState,
+        }),
+      );
     }
     totals.push({
       label: 'Total',
@@ -109,7 +135,7 @@ export class ProformaPdfService {
       title: 'PROFORMA INVOICE',
       number: proforma.proformaNumber,
       numberLabel: 'Proforma No.',
-      recipientLabel: 'PROFORMA TO',
+      recipientLabel: 'BILL TO',
       status: STATUS_LABELS[proforma.status] ?? STATUS_LABELS.draft,
       metaRows,
       items: toRenderItems(proforma.items),
@@ -121,12 +147,17 @@ export class ProformaPdfService {
       currency,
       taxType,
       country,
+      topMessage: business.proformaTopMessage,
       footerNote:
         business.proformaBottomMessage?.trim() ||
         `Thank you for your business — ${business.name}`,
       hasTax:
-        showTax && taxType !== 'none' && proforma.items.some((item) => item.taxRate > 0),
+        showTax &&
+        taxType !== 'none' &&
+        proforma.items.some((item) => item.taxRate > 0),
       taxLabel: taxTypeName(taxType),
+      supply,
+      discount: proforma.discount,
       show: { hsn: business.proformaShowHsn === true },
     };
 

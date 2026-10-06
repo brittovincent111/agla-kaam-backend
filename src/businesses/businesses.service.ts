@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   Logger,
@@ -25,6 +26,14 @@ import {
   ServicePresetDocument,
 } from '../service-presets/schemas/service-preset.schema';
 import {
+  Purchase,
+  PurchaseDocument,
+} from '../purchases/schemas/purchase.schema';
+import {
+  ProformaInvoice,
+  ProformaInvoiceDocument,
+} from '../proforma-invoices/schemas/proforma-invoice.schema';
+import {
   TeamMember,
   TeamMemberDocument,
 } from '../team-members/schemas/team-member.schema';
@@ -40,18 +49,46 @@ import {
   AppFeedback,
   AppFeedbackDocument,
 } from '../app-feedback/schemas/app-feedback.schema';
+import { Amc, AmcDocument } from '../amc/schemas/amc.schema';
+import {
+  InventoryItem,
+  InventoryItemDocument,
+} from '../inventory/schemas/inventory-item.schema';
+import {
+  Supplier,
+  SupplierDocument,
+} from '../suppliers/schemas/supplier.schema';
+import {
+  ApplePurchase,
+  ApplePurchaseDocument,
+} from '../subscriptions/schemas/apple-purchase.schema';
+import {
+  PlayPurchase,
+  PlayPurchaseDocument,
+} from '../subscriptions/schemas/play-purchase.schema';
 import { ServicePresetsService } from '../service-presets/service-presets.service';
 import { UpdateBusinessDto } from './dto/update-business.dto';
 import { DocumentTemplateId } from '../common/pdf/document-templates';
 import { S3Service } from '../common/s3/s3.service';
+import { AppleSignInService } from '../common/apple/apple-sign-in.service';
 import {
   inferBusinessGeoDefaults,
   geoDefaultsForCountry,
 } from '../common/utils/geo-defaults';
 import { splitClearableUpdate } from '../common/utils/clearable-update';
+import { idFilter } from '../common/utils/id-match';
+import { escapeRegex } from '../common/pagination/cursor-page';
 
 export interface BusinessWithBranding {
   name: string;
+  // Printed under the business name by most layouts. It was never copied
+  // into this object, so that line was blank on every real PDF.
+  tradeType?: string;
+  invoiceTopMessage?: string;
+  quotationTopMessage?: string;
+  proformaTopMessage?: string;
+  purchaseTopMessage?: string;
+  quotationShowShippingAddress?: boolean;
   address?: string;
   phone?: string;
   email?: string;
@@ -133,9 +170,24 @@ export class BusinessesService implements OnModuleInit {
     private readonly paymentOrderModel: Model<PaymentOrderDocument>,
     @InjectModel(AppFeedback.name)
     private readonly appFeedbackModel: Model<AppFeedbackDocument>,
+    @InjectModel(Purchase.name)
+    private readonly purchaseModel: Model<PurchaseDocument>,
+    @InjectModel(ProformaInvoice.name)
+    private readonly proformaModel: Model<ProformaInvoiceDocument>,
+    @InjectModel(Amc.name)
+    private readonly amcModel: Model<AmcDocument>,
+    @InjectModel(InventoryItem.name)
+    private readonly inventoryItemModel: Model<InventoryItemDocument>,
+    @InjectModel(Supplier.name)
+    private readonly supplierModel: Model<SupplierDocument>,
+    @InjectModel(ApplePurchase.name)
+    private readonly applePurchaseModel: Model<ApplePurchaseDocument>,
+    @InjectModel(PlayPurchase.name)
+    private readonly playPurchaseModel: Model<PlayPurchaseDocument>,
     private readonly configService: ConfigService,
     private readonly servicePresetsService: ServicePresetsService,
     private readonly s3Service: S3Service,
+    private readonly appleSignInService: AppleSignInService,
   ) {}
 
   // Mongoose only ever *creates* indexes that don't already exist — it
@@ -173,6 +225,22 @@ export class BusinessesService implements OnModuleInit {
 
   // passwordHash has select:false on the schema — only AuthService's login
   // check needs it, so every other read of a Business stays password-free.
+  // An owner by the phone number on their account, in its usual spellings
+  // (see loginPhoneDigits) — for phone sign-in and so a number is never both
+  // an owner's and a technician's login.
+  findByLoginPhone(
+    digits: string,
+    withPassword = false,
+  ): Promise<BusinessDocument | null> {
+    const local = digits.startsWith('91') ? digits.slice(2) : digits;
+    const query = this.businessModel.findOne({
+      phone: {
+        $in: [`+${digits}`, digits, local, `0${local}`, `+91 ${local}`],
+      },
+    });
+    return (withPassword ? query.select('+passwordHash') : query).exec();
+  }
+
   findByEmailWithPassword(email: string): Promise<BusinessDocument | null> {
     return this.businessModel
       .findOne({ email: email.toLowerCase() })
@@ -191,7 +259,7 @@ export class BusinessesService implements OnModuleInit {
   findByEmailWithResetCode(email: string): Promise<BusinessDocument | null> {
     return this.businessModel
       .findOne({ email: email.toLowerCase() })
-      .select('+passwordResetCodeHash +passwordResetExpiresAt')
+      .select('+passwordResetCodeHash +passwordResetExpiresAt +passwordResetAttempts')
       .exec();
   }
 
@@ -204,19 +272,49 @@ export class BusinessesService implements OnModuleInit {
       .findByIdAndUpdate(id, {
         passwordResetCodeHash: codeHash,
         passwordResetExpiresAt: expiresAt,
+        // A fresh code starts with a fresh count of wrong tries.
+        passwordResetAttempts: 0,
       })
       .exec();
   }
 
   // Sets the new password and consumes the reset code in one update so a
   // code can never be replayed after a successful reset.
-  async resetPasswordWithCode(id: string, passwordHash: string): Promise<void> {
+  findByIdWithPassword(id: string): Promise<BusinessDocument | null> {
+    return this.businessModel.findById(id).select('+passwordHash').exec();
+  }
+
+  // `emailVerified` only for a reset by emailed code: the code arriving
+  // proves the inbox is the owner's. A signed-in password change proves
+  // nothing about the email, so it leaves the flag alone.
+  async resetPasswordWithCode(
+    id: string,
+    passwordHash: string,
+    opts: { emailVerified?: boolean } = {},
+  ): Promise<void> {
     await this.businessModel
       .findByIdAndUpdate(id, {
         passwordHash,
-        $unset: { passwordResetCodeHash: 1, passwordResetExpiresAt: 1 },
+        ...(opts.emailVerified ? { emailVerified: true } : {}),
+        $unset: { passwordResetCodeHash: 1, passwordResetExpiresAt: 1, passwordResetAttempts: 1 },
       })
       .exec();
+  }
+
+  // One more wrong reset code. At `max` the code is thrown away, so it can't
+  // be guessed by retrying. Returns the count so far.
+  async recordResetCodeFailure(id: string, max: number): Promise<number> {
+    const doc = await this.businessModel
+      .findByIdAndUpdate(id, { $inc: { passwordResetAttempts: 1 } }, { new: true })
+      .select('+passwordResetAttempts')
+      .exec();
+    const tries = doc?.passwordResetAttempts ?? max;
+    if (tries >= max) {
+      await this.businessModel
+        .findByIdAndUpdate(id, { $unset: { passwordResetCodeHash: 1, passwordResetExpiresAt: 1 } })
+        .exec();
+    }
+    return tries;
   }
 
   createWithEmail(params: {
@@ -228,6 +326,8 @@ export class BusinessesService implements OnModuleInit {
     const geo = inferBusinessGeoDefaults(params.phone);
     return this.businessModel.create({
       email: params.email.toLowerCase(),
+      // Only reached after the emailed signup code checked out.
+      emailVerified: true,
       passwordHash: params.passwordHash,
       ...(params.name ? { name: params.name } : {}),
       ...(params.phone ? { phone: params.phone } : {}),
@@ -238,15 +338,18 @@ export class BusinessesService implements OnModuleInit {
     });
   }
 
+  // `email` only when Google says it is verified — see AuthService.
   createWithGoogle(params: {
-    email: string;
+    email?: string;
     googleId: string;
     name?: string;
     phone?: string;
   }): Promise<BusinessDocument> {
     const geo = inferBusinessGeoDefaults(params.phone);
     return this.businessModel.create({
-      email: params.email.toLowerCase(),
+      ...(params.email
+        ? { email: params.email.toLowerCase(), emailVerified: true }
+        : {}),
       googleId: params.googleId,
       ...(params.name ? { name: params.name } : {}),
       ...(params.phone ? { phone: params.phone } : {}),
@@ -259,6 +362,7 @@ export class BusinessesService implements OnModuleInit {
 
   // Used when a Google sign-in's email matches an existing phone/email
   // account — links it rather than creating a duplicate business.
+  // Only for an account whose email is verified (AuthService checks).
   async linkGoogleId(id: string, googleId: string): Promise<BusinessDocument> {
     const business = await this.businessModel
       .findByIdAndUpdate(id, { googleId }, { new: true })
@@ -274,11 +378,18 @@ export class BusinessesService implements OnModuleInit {
     appleId: string;
     name?: string;
     phone?: string;
+    appleRefreshToken?: string;
   }): Promise<BusinessDocument> {
     const geo = inferBusinessGeoDefaults(params.phone);
     return this.businessModel.create({
+      // Apple only hands out addresses it has verified (including private
+      // relay ones).
       email: params.email.toLowerCase(),
+      emailVerified: true,
       appleId: params.appleId,
+      ...(params.appleRefreshToken
+        ? { appleRefreshToken: params.appleRefreshToken }
+        : {}),
       ...(params.name ? { name: params.name } : {}),
       ...(params.phone ? { phone: params.phone } : {}),
       country: geo.country,
@@ -290,14 +401,65 @@ export class BusinessesService implements OnModuleInit {
 
   // Same rationale as linkGoogleId — an Apple sign-in whose email matches
   // an existing account links to it instead of creating a duplicate.
-  async linkAppleId(id: string, appleId: string): Promise<BusinessDocument> {
+  async linkAppleId(
+    id: string,
+    appleId: string,
+    appleRefreshToken?: string,
+  ): Promise<BusinessDocument> {
     const business = await this.businessModel
-      .findByIdAndUpdate(id, { appleId }, { new: true })
+      .findByIdAndUpdate(
+        id,
+        { appleId, ...(appleRefreshToken ? { appleRefreshToken } : {}) },
+        { new: true },
+      )
       .exec();
     if (!business) {
       throw new NotFoundException('Business not found');
     }
     return business;
+  }
+
+  // A returning Apple user whose code exchange produced a fresh token — the
+  // newest one is the one worth revoking at deletion.
+  async setAppleRefreshToken(
+    id: string,
+    appleRefreshToken: string,
+  ): Promise<void> {
+    await this.businessModel
+      .updateOne({ _id: id }, { appleRefreshToken })
+      .exec();
+  }
+
+  /**
+   * Takes an email address off an account that never proved it owns it.
+   *
+   * Called when someone signs in with Google/Apple and that provider vouches
+   * for the address: the provider's word beats a profile field anyone could
+   * have typed. `email` is unique, so the new sign-in's account could not be
+   * created with it while the unverified claim stayed in place — and refusing
+   * the sign-in instead would let anyone block a person from ever signing up
+   * by squatting their address. The other account keeps everything else
+   * (data, phone, password); only the unproven address goes.
+   */
+  async releaseUnverifiedEmail(id: string): Promise<void> {
+    const released = await this.businessModel
+      .findOneAndUpdate(
+        { _id: id, emailVerified: false },
+        {
+          $unset: {
+            email: '',
+            passwordResetCodeHash: '',
+            passwordResetExpiresAt: '',
+            passwordResetAttempts: '',
+          },
+        },
+      )
+      .exec();
+    if (released) {
+      this.logger.warn(
+        `Removed unverified email from business ${id}: a Google/Apple sign-in proved the address belongs to someone else.`,
+      );
+    }
   }
 
   async findById(id: string): Promise<BusinessDocument> {
@@ -330,8 +492,11 @@ export class BusinessesService implements OnModuleInit {
         : Promise.resolve(null),
     ]);
 
+    // Every PDF setting has to be listed here — anything left out never
+    // reaches the renderer, and the setting silently does nothing.
     return {
       name: business.name,
+      tradeType: business.tradeType,
       address: business.address,
       phone: business.phone,
       email: business.email,
@@ -372,6 +537,11 @@ export class BusinessesService implements OnModuleInit {
       purchaseShowHsn: business.purchaseShowHsn,
       purchaseShowBankInfo: business.purchaseShowBankInfo,
       purchaseBottomMessage: business.purchaseBottomMessage,
+      invoiceTopMessage: business.invoiceTopMessage,
+      quotationTopMessage: business.quotationTopMessage,
+      proformaTopMessage: business.proformaTopMessage,
+      purchaseTopMessage: business.purchaseTopMessage,
+      quotationShowShippingAddress: business.quotationShowShippingAddress,
     };
   }
 
@@ -431,26 +601,43 @@ export class BusinessesService implements OnModuleInit {
     // raw E11000 and the client gets a 500, where the real answer is "that
     // number already belongs to another account" — which is also the hint a
     // returning user needs when they've accidentally created a second account.
+    const update = splitClearableUpdate({
+      ...(geoFromFirstPhone
+        ? {
+            country: geoFromFirstPhone.country,
+            currency: geoFromFirstPhone.currency,
+            timezone: geoFromFirstPhone.timezone,
+            taxType: geoFromFirstPhone.taxType,
+          }
+        : {}),
+      ...dto,
+    });
+    // A new address is unproven until a code sent to it comes back (a
+    // password reset), so Google/Apple will not link to this account by it.
+    // A reset code already in flight was sent to the OLD address — it must
+    // not then verify the new one, so it goes too. Same address in another
+    // case is not a change: the schema lowercases it anyway.
+    if (
+      dto.email !== undefined &&
+      dto.email.trim().toLowerCase() !== (before.email ?? '').toLowerCase()
+    ) {
+      update.$set = { ...update.$set, emailVerified: false };
+      update.$unset = {
+        ...update.$unset,
+        passwordResetCodeHash: '',
+        passwordResetExpiresAt: '',
+        passwordResetAttempts: '',
+      };
+    }
+
     const business = await this.businessModel
-      .findByIdAndUpdate(
-        id,
-        splitClearableUpdate({
-          ...(geoFromFirstPhone
-            ? {
-                country: geoFromFirstPhone.country,
-                currency: geoFromFirstPhone.currency,
-                timezone: geoFromFirstPhone.timezone,
-                taxType: geoFromFirstPhone.taxType,
-              }
-            : {}),
-          ...dto,
-        }),
-        { new: true },
-      )
+      .findByIdAndUpdate(id, update, { new: true })
       .exec()
       .catch((err: { code?: number; keyPattern?: Record<string, unknown> }) => {
         if (err?.code === 11000) {
-          const field = err.keyPattern?.phone ? 'phone number' : 'email address';
+          const field = err.keyPattern?.phone
+            ? 'phone number'
+            : 'email address';
           throw new ConflictException(
             `That ${field} is already used by another account. Sign in to that account instead.`,
           );
@@ -593,37 +780,106 @@ export class BusinessesService implements OnModuleInit {
   async remove(id: string): Promise<void> {
     const business = await this.businessModel
       .findById(id)
-      .select('+logoKey +signatureKey')
+      .select('+logoKey +signatureKey +appleRefreshToken')
       .exec();
     if (!business) {
       throw new NotFoundException('Business not found');
     }
+    const businessId = idFilter(id);
 
-    // Cascade-delete every business-scoped collection — a plain
-    // findByIdAndDelete on Business alone would orphan all of this data.
-    await Promise.all([
-      this.customerModel.deleteMany({ businessId: id }).exec(),
-      this.serviceModel.deleteMany({ businessId: id }).exec(),
-      this.invoiceModel.deleteMany({ businessId: id }).exec(),
-      this.paymentModel.deleteMany({ businessId: id }).exec(),
-      this.quotationModel.deleteMany({ businessId: id }).exec(),
-      this.servicePresetModel.deleteMany({ businessId: id }).exec(),
-      this.teamMemberModel.deleteMany({ businessId: id }).exec(),
-      this.subscriptionModel.deleteMany({ businessId: id }).exec(),
-      this.paymentOrderModel.deleteMany({ businessId: id }).exec(),
-      this.appFeedbackModel.deleteMany({ businessId: id }).exec(),
+    // Read before the cascade deletes the rows that hold them.
+    const [services, appleMembers] = await Promise.all([
+      this.serviceModel
+        .find({
+          businessId,
+          $or: [
+            { beforePhotoKey: { $exists: true } },
+            { afterPhotoKey: { $exists: true } },
+            { signatureKey: { $exists: true } },
+          ],
+        })
+        .select('+beforePhotoKey +afterPhotoKey +signatureKey')
+        .lean()
+        .exec(),
+      this.teamMemberModel
+        .find({ businessId, appleRefreshToken: { $exists: true } })
+        .select('+appleRefreshToken')
+        .lean()
+        .exec(),
     ]);
 
+    // Cascade-delete every business-scoped collection — a plain
+    // findByIdAndDelete on Business alone would orphan all of this data, and
+    // account deletion has to really delete it (App Store / Play policy).
+    // Matched in both stored id forms (see idFilter), or rows saved with an
+    // ObjectId businessId would silently survive.
+    //
+    // The App Store / Play purchase rows go too. They exist to map a store
+    // notification back to a business and to stop one purchase being
+    // restored onto a second account; with the business gone a notification
+    // has nothing to update, and keeping them would block the same person
+    // from restoring a still-paid subscription onto a new account.
+    await Promise.all(
+      this.businessScopedModels().map((model) =>
+        model.deleteMany({ businessId }).exec(),
+      ),
+    );
+
+    // Best-effort from here on: the data is already gone, so a storage or
+    // Apple hiccup is logged rather than failing a deletion the user asked
+    // for.
+    const s3Keys = [
+      business.logoKey,
+      business.signatureKey,
+      ...services.flatMap((s) => [
+        s.beforePhotoKey,
+        s.afterPhotoKey,
+        s.signatureKey,
+      ]),
+    ].filter((key): key is string => !!key);
+    const appleTokens = [
+      business.appleRefreshToken,
+      ...appleMembers.map((m) => m.appleRefreshToken),
+    ].filter((token): token is string => !!token);
     await Promise.all([
-      business.logoKey
-        ? this.s3Service.delete(business.logoKey)
-        : Promise.resolve(),
-      business.signatureKey
-        ? this.s3Service.delete(business.signatureKey)
-        : Promise.resolve(),
+      ...s3Keys.map((key) =>
+        this.s3Service.delete(key).catch((err: Error) => {
+          this.logger.warn(
+            `Account deletion: could not delete S3 object ${key}: ${err?.message ?? err}`,
+          );
+        }),
+      ),
+      // Apple requires the app's access to be revoked when the account goes.
+      ...appleTokens.map((token) =>
+        this.appleSignInService.revokeRefreshToken(token),
+      ),
     ]);
 
     await this.businessModel.findByIdAndDelete(id).exec();
+  }
+
+  // Every collection keyed by businessId. Kept as one list so the deletion
+  // spec can check nothing business-scoped is left out.
+  private businessScopedModels(): Model<any>[] {
+    return [
+      this.customerModel,
+      this.serviceModel,
+      this.invoiceModel,
+      this.paymentModel,
+      this.quotationModel,
+      this.proformaModel,
+      this.purchaseModel,
+      this.supplierModel,
+      this.inventoryItemModel,
+      this.amcModel,
+      this.servicePresetModel,
+      this.teamMemberModel,
+      this.subscriptionModel,
+      this.paymentOrderModel,
+      this.applePurchaseModel,
+      this.playPurchaseModel,
+      this.appFeedbackModel,
+    ];
   }
 
   async updateSubscriptionStatus(
@@ -665,16 +921,131 @@ export class BusinessesService implements OnModuleInit {
     // it's lifted out into its own operator when present.
     const { $unset, ...set } = update as { $unset?: unknown };
     const business = await this.businessModel
-      .findByIdAndUpdate(
-        id,
-        $unset ? { $set: set, $unset } : { $set: set },
-        { new: true },
-      )
+      .findByIdAndUpdate(id, $unset ? { $set: set, $unset } : { $set: set }, {
+        new: true,
+      })
       .exec();
     if (!business) {
       throw new NotFoundException('Business not found');
     }
     return business;
+  }
+
+  /**
+   * Refuses a "next number" setting that would hand out a number already used.
+   *
+   * The settings screens used to send every serial back on every save, from
+   * a business the app had cached when the screen opened. Saving any other
+   * setting after a few invoices had gone out moved the counter backwards,
+   * and the next invoice then collided with an existing one on the unique
+   * {businessId, invoiceNumber} index — a raw 500 on every attempt until the
+   * counter caught up again.
+   *
+   * Compared against the highest serial actually used under the prefix that
+   * will be in force (the one in this request, else the stored one), so
+   * starting a fresh prefix back at 1 is still allowed. Only for the
+   * owner-facing settings endpoint; the services' own counter writes do not
+   * come through here.
+   */
+  async assertNextSerialsAhead(
+    id: string,
+    dto: UpdateBusinessDto,
+  ): Promise<void> {
+    const docs = [
+      {
+        label: 'invoice',
+        serial: 'invoiceNextSerial',
+        prefix: 'invoicePrefix',
+        defaultPrefix: 'INV-',
+        model: this.invoiceModel as Model<unknown>,
+        numberField: 'invoiceNumber',
+      },
+      {
+        label: 'quotation',
+        serial: 'quotationNextSerial',
+        prefix: 'quotationPrefix',
+        defaultPrefix: 'QT-',
+        model: this.quotationModel as Model<unknown>,
+        numberField: 'quotationNumber',
+      },
+      {
+        label: 'purchase order',
+        serial: 'purchaseNextSerial',
+        prefix: 'purchasePrefix',
+        defaultPrefix: 'PO-',
+        model: this.purchaseModel as Model<unknown>,
+        numberField: 'purchaseNumber',
+      },
+      {
+        label: 'proforma invoice',
+        serial: 'proformaNextSerial',
+        prefix: 'proformaPrefix',
+        defaultPrefix: 'PI-',
+        model: this.proformaModel as Model<unknown>,
+        numberField: 'proformaNumber',
+      },
+    ] as const;
+    const requested = dto as Record<string, unknown>;
+    if (!docs.some((d) => requested[d.serial] !== undefined)) return;
+
+    const before = await this.findById(id);
+    for (const doc of docs) {
+      const next = requested[doc.serial];
+      if (typeof next !== 'number') continue;
+      const prefix =
+        ((requested[doc.prefix] as string | undefined) ??
+          (before.get(doc.prefix) as string | undefined)) ||
+        doc.defaultPrefix;
+      const highest = await this.highestSerialUsed(
+        doc.model,
+        id,
+        doc.numberField,
+        prefix,
+      );
+      if (next <= highest) {
+        throw new BadRequestException(
+          `${prefix} ${doc.label} numbers up to ${highest} are already used. Set the next number to ${highest + 1} or higher.`,
+        );
+      }
+    }
+  }
+
+  // The serial is the trailing number of `${prefix}${year}-${serial}`, the
+  // format every document service writes. Aggregation does not cast ids, so
+  // the business is matched in both stored forms.
+  private async highestSerialUsed(
+    model: Model<unknown>,
+    businessId: string,
+    numberField: string,
+    prefix: string,
+  ): Promise<number> {
+    const pattern = `^${escapeRegex(prefix)}\\d{4}-(\\d+)$`;
+    const [row] = await model
+      .aggregate<{ highest: number }>([
+        {
+          $match: {
+            businessId: idFilter(businessId),
+            [numberField]: { $regex: pattern },
+          },
+        },
+        {
+          $project: {
+            found: {
+              $regexFind: { input: `$${numberField}`, regex: pattern },
+            },
+          },
+        },
+        {
+          $group: {
+            _id: null,
+            highest: {
+              $max: { $toLong: { $arrayElemAt: ['$found.captures', 0] } },
+            },
+          },
+        },
+      ])
+      .exec();
+    return Number(row?.highest ?? 0);
   }
 
   // Hands out the next document serial atomically.
@@ -734,6 +1105,7 @@ export class BusinessesService implements OnModuleInit {
   }
 
   async updatePushToken(id: string, pushToken: string): Promise<void> {
+    await this.releasePushToken(pushToken, { businessId: id });
     await this.businessModel.findByIdAndUpdate(id, { pushToken }).exec();
   }
 
@@ -745,9 +1117,54 @@ export class BusinessesService implements OnModuleInit {
     teamMemberId: string,
     pushToken: string,
   ): Promise<void> {
+    await this.releasePushToken(pushToken, { teamMemberId });
     await this.teamMemberModel
       .findByIdAndUpdate(teamMemberId, { pushToken })
       .exec();
+  }
+
+  // Logout. Without this the phone kept receiving the signed-out account's
+  // reminders (customer names, job details) until someone else signed in.
+  async clearPushToken(id: string): Promise<void> {
+    await this.businessModel
+      .updateOne({ _id: id }, { $unset: { pushToken: '' } })
+      .exec();
+  }
+
+  async clearTeamMemberPushToken(teamMemberId: string): Promise<void> {
+    await this.teamMemberModel
+      .updateOne({ _id: teamMemberId }, { $unset: { pushToken: '' } })
+      .exec();
+  }
+
+  // An Expo token identifies the device, not the person. When a second
+  // account signs in on a shared phone, the token is taken off whichever
+  // owner or technician held it before — otherwise that phone went on getting
+  // the previous account's pushes alongside the new one's.
+  private async releasePushToken(
+    pushToken: string,
+    keep: { businessId?: string; teamMemberId?: string },
+  ): Promise<void> {
+    await Promise.all([
+      this.businessModel
+        .updateMany(
+          {
+            pushToken,
+            ...(keep.businessId ? { _id: { $ne: keep.businessId } } : {}),
+          },
+          { $unset: { pushToken: '' } },
+        )
+        .exec(),
+      this.teamMemberModel
+        .updateMany(
+          {
+            pushToken,
+            ...(keep.teamMemberId ? { _id: { $ne: keep.teamMemberId } } : {}),
+          },
+          { $unset: { pushToken: '' } },
+        )
+        .exec(),
+    ]);
   }
 
   // Called when Expo reports a token no longer belongs to an installed app —

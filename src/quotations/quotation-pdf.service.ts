@@ -21,6 +21,7 @@ import {
   taxTypeName,
 } from '../common/pdf/document-render';
 import { renderDocument } from '../common/pdf/render-document';
+import { resolveGstSupply } from '../common/pdf/place-of-supply';
 
 // Mirror of InvoicePdfService: all drawing lives in common/pdf, and this
 // service only describes a quotation as a DocumentSpec. Sharing the renderer
@@ -40,10 +41,12 @@ const STATUS_LABELS: Record<string, RenderStatus> = {
 // RenderBusiness stays free of per-document-type setting names. All optional,
 // and undefined means "show".
 type QuotationRenderBusiness = RenderBusiness & {
+  quotationTopMessage?: string;
   quotationShowTax?: boolean;
   quotationShowBankInfo?: boolean;
   quotationShowUpiInfo?: boolean;
   quotationShowSignature?: boolean;
+  quotationShowShippingAddress?: boolean;
   quotationBottomMessage?: string;
   quotationShowHsn?: boolean;
 };
@@ -75,7 +78,14 @@ export class QuotationPdfService {
       this.customersService.findOne(businessId, customerId),
     ]);
 
-    return this.render(business, customer, quotation, templateId, accentColor, geometry);
+    return this.render(
+      business,
+      customer,
+      quotation,
+      templateId,
+      accentColor,
+      geometry,
+    );
   }
 
   // Split out from generate() so preview rendering (fixed sample data, no
@@ -100,18 +110,38 @@ export class QuotationPdfService {
 
     const metaRows = [
       { label: 'Date', value: formatDate(quotation.quotationDate, country) },
-      { label: 'Valid Until', value: formatDate(quotation.validUntil, country) },
+      {
+        label: 'Valid Until',
+        value: formatDate(quotation.validUntil, country),
+      },
     ];
 
-    const totals: RenderTotalRow[] = [{ label: 'Subtotal', value: quotation.subtotal }];
+    // Indian GST only: the state each party is in decides CGST + SGST versus
+    // IGST, and a tax invoice states its place of supply.
+    const supply = resolveGstSupply(taxType, country, business, customer);
+    if (supply?.placeOfSupply) {
+      metaRows.push({ label: 'Place of Supply', value: supply.placeOfSupply });
+    }
+
+    const totals: RenderTotalRow[] = [
+      { label: 'Subtotal', value: quotation.subtotal },
+    ];
     if (quotation.discount > 0) {
-      totals.push({ label: 'Discount', value: quotation.discount, negative: true });
+      totals.push({
+        label: 'Discount',
+        value: quotation.discount,
+        negative: true,
+      });
     }
     // No quotationShowDiscount setting exists, so the discount row above is
     // always shown when there is one.
     const showTax = business.quotationShowTax !== false;
     if (showTax) {
-      totals.push(...buildTaxRows(taxType, quotation.taxTotal, quotation.items));
+      totals.push(
+        ...buildTaxRows(taxType, quotation.taxTotal, quotation.items, {
+          interState: supply?.interState,
+        }),
+      );
     }
     totals.push({
       label: 'Total',
@@ -125,7 +155,7 @@ export class QuotationPdfService {
       title: 'QUOTATION',
       number: quotation.quotationNumber,
       numberLabel: 'Quotation No.',
-      recipientLabel: 'QUOTED TO',
+      recipientLabel: 'BILL TO',
       status: STATUS_LABELS[quotation.status] ?? STATUS_LABELS.draft,
       metaRows,
       items: toRenderItems(quotation.items),
@@ -136,12 +166,17 @@ export class QuotationPdfService {
       currency,
       taxType,
       country,
+      topMessage: business.quotationTopMessage,
       footerNote:
         business.quotationBottomMessage?.trim() ||
         `Thank you for the opportunity — ${business.name}`,
       hasTax:
-        showTax && taxType !== 'none' && quotation.items.some((item) => item.taxRate > 0),
+        showTax &&
+        taxType !== 'none' &&
+        quotation.items.some((item) => item.taxRate > 0),
       taxLabel: taxTypeName(taxType),
+      supply,
+      discount: quotation.discount,
       show: {
         signature: business.quotationShowSignature !== false,
         hsn: business.quotationShowHsn === true,
@@ -153,7 +188,12 @@ export class QuotationPdfService {
         bank: business.quotationShowBankInfo !== false,
         upi: business.quotationShowUpiInfo !== false,
       }),
-      customer,
+      // "Show Shipping Address" off: the customer's address stays off the
+      // quotation. Place of supply was already worked out from it above, so
+      // the tax split is unaffected by hiding it.
+      business.quotationShowShippingAddress === false
+        ? { ...customer, address: undefined }
+        : customer,
       spec,
       theme,
       geometry,

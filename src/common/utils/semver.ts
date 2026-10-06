@@ -39,5 +39,7 @@ export function isOlderThan(version: string, floor: string): boolean {
 
 /** A version string we are willing to act on at all. */
 export function isValidVersion(value: unknown): value is string {
-  return typeof value === 'string' && /^\d+(\.\d+){0,3}([-+].*)?$/.test(value.trim());
+  return (
+    typeof value === 'string' && /^\d+(\.\d+){0,3}([-+].*)?$/.test(value.trim())
+  );
 }

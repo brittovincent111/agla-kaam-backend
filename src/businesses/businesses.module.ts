@@ -29,10 +29,30 @@ import {
   AppFeedback,
   AppFeedbackSchema,
 } from '../app-feedback/schemas/app-feedback.schema';
+import { Purchase, PurchaseSchema } from '../purchases/schemas/purchase.schema';
+import {
+  ProformaInvoice,
+  ProformaInvoiceSchema,
+} from '../proforma-invoices/schemas/proforma-invoice.schema';
+import { Amc, AmcSchema } from '../amc/schemas/amc.schema';
+import {
+  InventoryItem,
+  InventoryItemSchema,
+} from '../inventory/schemas/inventory-item.schema';
+import { Supplier, SupplierSchema } from '../suppliers/schemas/supplier.schema';
+import {
+  ApplePurchase,
+  ApplePurchaseSchema,
+} from '../subscriptions/schemas/apple-purchase.schema';
+import {
+  PlayPurchase,
+  PlayPurchaseSchema,
+} from '../subscriptions/schemas/play-purchase.schema';
 import { ServicePresetsModule } from '../service-presets/service-presets.module';
 import { BusinessesService } from './businesses.service';
 import { BusinessesController } from './businesses.controller';
 import { S3Service } from '../common/s3/s3.service';
+import { AppleSignInService } from '../common/apple/apple-sign-in.service';
 
 @Module({
   imports: [
@@ -53,11 +73,20 @@ import { S3Service } from '../common/s3/s3.service';
       { name: Subscription.name, schema: SubscriptionSchema },
       { name: PaymentOrder.name, schema: PaymentOrderSchema },
       { name: AppFeedback.name, schema: AppFeedbackSchema },
+      // Also read to check a "next number" setting against the numbers
+      // already used (assertNextSerialsAhead).
+      { name: Purchase.name, schema: PurchaseSchema },
+      { name: ProformaInvoice.name, schema: ProformaInvoiceSchema },
+      { name: Amc.name, schema: AmcSchema },
+      { name: InventoryItem.name, schema: InventoryItemSchema },
+      { name: Supplier.name, schema: SupplierSchema },
+      { name: ApplePurchase.name, schema: ApplePurchaseSchema },
+      { name: PlayPurchase.name, schema: PlayPurchaseSchema },
     ]),
     ServicePresetsModule,
   ],
   controllers: [BusinessesController],
-  providers: [BusinessesService, S3Service],
+  providers: [BusinessesService, S3Service, AppleSignInService],
   exports: [BusinessesService],
 })
 export class BusinessesModule {}

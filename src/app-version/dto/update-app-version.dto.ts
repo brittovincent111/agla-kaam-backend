@@ -1,4 +1,10 @@
-import { IsIn, IsOptional, IsString, MaxLength, Validate } from 'class-validator';
+import {
+  IsIn,
+  IsOptional,
+  IsString,
+  MaxLength,
+  Validate,
+} from 'class-validator';
 import { IsVersionString } from './is-version-string.validator';
 
 export class UpdateAppVersionDto {

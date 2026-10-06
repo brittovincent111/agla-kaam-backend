@@ -1,4 +1,4 @@
-import { IsOptional, IsString } from 'class-validator';
+import { IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class AppleAuthDto {
   // The identity token returned by expo-apple-authentication on the client
@@ -10,5 +10,15 @@ export class AppleAuthDto {
   // — the client passes it along here since there's no other way to get it.
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   fullName?: string;
+
+  // The one-time authorization code from the same Apple sign-in. Exchanged
+  // for a refresh token so account deletion can revoke the app's access at
+  // Apple (App Store Review Guideline 5.1.1(v)). Optional: older app builds
+  // do not send it.
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  authorizationCode?: string;
 }

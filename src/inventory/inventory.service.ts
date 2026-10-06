@@ -1,7 +1,10 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { InventoryItem, InventoryItemDocument } from './schemas/inventory-item.schema';
+import {
+  InventoryItem,
+  InventoryItemDocument,
+} from './schemas/inventory-item.schema';
 import { CreateInventoryItemDto } from './dto/create-inventory-item.dto';
 import { UpdateInventoryItemDto } from './dto/update-inventory-item.dto';
 import {
@@ -52,7 +55,12 @@ export class InventoryService {
    */
   async findPageForBusiness(
     businessId: string,
-    options: { type?: string; search?: string; limit?: number; cursor?: string },
+    options: {
+      type?: string;
+      search?: string;
+      limit?: number;
+      cursor?: string;
+    },
   ): Promise<Page<InventoryItemDocument>> {
     const limit = clampLimit(options.limit);
     const cursor = decodePageCursor(options.cursor);
@@ -96,7 +104,7 @@ export class InventoryService {
   // still call it; new callers should use findPageForBusiness.
   async findAll(businessId: string): Promise<InventoryItem[]> {
     return this.inventoryItemModel
-      .find({ businessId: new Types.ObjectId(businessId) })
+      .find({ businessId: idFilter(businessId) })
       .sort({ name: 1 })
       .exec();
   }
@@ -105,7 +113,7 @@ export class InventoryService {
     const item = await this.inventoryItemModel
       .findOne({
         _id: new Types.ObjectId(id),
-        businessId: new Types.ObjectId(businessId),
+        businessId: idFilter(businessId),
       })
       .exec();
     if (!item) {
@@ -123,7 +131,7 @@ export class InventoryService {
       .findOneAndUpdate(
         {
           _id: new Types.ObjectId(id),
-          businessId: new Types.ObjectId(businessId),
+          businessId: idFilter(businessId),
         },
         { $set: dto },
         { new: true },
@@ -139,7 +147,7 @@ export class InventoryService {
     const result = await this.inventoryItemModel
       .deleteOne({
         _id: new Types.ObjectId(id),
-        businessId: new Types.ObjectId(businessId),
+        businessId: idFilter(businessId),
       })
       .exec();
     if (result.deletedCount === 0) {
@@ -147,16 +155,58 @@ export class InventoryService {
     }
   }
 
+  /**
+   * Applies a stock delta atomically.
+   *
+   * This used to read the document, add in Node, and save it back. Two
+   * invoices raised at the same moment both read the same starting quantity
+   * and the second save overwrote the first, so one of the deductions simply
+   * vanished. $inc is applied by the database itself, so concurrent callers
+   * queue rather than clobber.
+   */
   async adjustStock(
     businessId: string,
     id: string,
     quantityChange: number,
   ): Promise<InventoryItem> {
     const item = await this.findOne(businessId, id);
+    // Services have no stock to move; returning early also avoids writing a
+    // stockQuantity onto a document that should not carry one.
     if (item.isService) return item;
 
-    const newStock = (item.stockQuantity || 0) + quantityChange;
-    item.stockQuantity = Math.max(0, newStock);
-    return (item as InventoryItemDocument).save();
+    // businessId is a Mixed path (see id-match.ts), so a bare string never
+    // matched the ObjectId every item is created with: this update found
+    // nothing, threw NotFound, and the invoice and purchase callers swallowed
+    // it — stock never moved.
+    const updated = await this.inventoryItemModel
+      .findOneAndUpdate(
+        { _id: id, businessId: idFilter(businessId) },
+        { $inc: { stockQuantity: quantityChange } },
+        { new: true },
+      )
+      .exec();
+
+    if (!updated) {
+      throw new NotFoundException('Inventory item not found');
+    }
+
+    // $inc cannot clamp, so a deduction that took the count negative is
+    // corrected in a second atomic write rather than by reading and saving.
+    if ((updated.stockQuantity ?? 0) < 0) {
+      const clamped = await this.inventoryItemModel
+        .findOneAndUpdate(
+          {
+            _id: id,
+            businessId: idFilter(businessId),
+            stockQuantity: { $lt: 0 },
+          },
+          { $set: { stockQuantity: 0 } },
+          { new: true },
+        )
+        .exec();
+      return clamped ?? updated;
+    }
+
+    return updated;
   }
 }

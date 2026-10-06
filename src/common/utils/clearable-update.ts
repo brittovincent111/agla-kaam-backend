@@ -18,13 +18,17 @@ export interface ClearableUpdate {
 // Splits an update into the fields being written and the ones being cleared.
 // Kept as a pure function in its own module so it can be unit-tested without
 // pulling the whole BusinessesService (and Mongoose) into the test.
-export function splitClearableUpdate(dto: Record<string, unknown>): ClearableUpdate {
+export function splitClearableUpdate(
+  dto: Record<string, unknown>,
+): ClearableUpdate {
   const set: Record<string, unknown> = {};
   const unset: Record<string, ''> = {};
 
   for (const [key, value] of Object.entries(dto)) {
     if (value === undefined) continue;
-    const clearable = (CLEARABLE_TEXT_FIELDS as readonly string[]).includes(key);
+    const clearable = (CLEARABLE_TEXT_FIELDS as readonly string[]).includes(
+      key,
+    );
     if (clearable && typeof value === 'string' && value.trim() === '') {
       unset[key] = '';
     } else {

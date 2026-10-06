@@ -1,11 +1,27 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { ProformaInvoicesService } from './proforma-invoices.service';
 import { ProformaPdfService } from './proforma-pdf.service';
 import { CreateProformaInvoiceDto } from './dto/create-proforma-invoice.dto';
 import { UpdateProformaInvoiceDto } from './dto/update-proforma-invoice.dto';
-import { CurrentBusiness, AuthenticatedBusiness } from '../common/decorators/current-business.decorator';
+import {
+  CurrentBusiness,
+  AuthenticatedBusiness,
+} from '../common/decorators/current-business.decorator';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { Roles } from '../common/decorators/roles.decorator';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { BusinessesService } from '../businesses/businesses.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
@@ -17,7 +33,11 @@ import {
 import { ListProformaInvoicesDto } from './dto/list-proforma-invoices.dto';
 
 @Controller('proforma-invoices')
-@UseGuards(JwtAuthGuard)
+// Owner-only: /:id/convert turns a proforma into a real tax invoice, so
+// leaving this open let a technician issue company invoices that
+// InvoicingController explicitly forbids them from creating directly.
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('owner')
 export class ProformaInvoicesController {
   constructor(
     private readonly proformaService: ProformaInvoicesService,
@@ -81,6 +101,14 @@ export class ProformaInvoicesController {
     return this.proformaService.delete(business.businessId, id);
   }
 
+  @Patch(':id/send')
+  send(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+  ) {
+    return this.proformaService.send(business.businessId, id);
+  }
+
   @Post(':id/convert')
   convert(
     @CurrentBusiness() business: AuthenticatedBusiness,
@@ -104,7 +132,7 @@ export class ProformaInvoicesController {
       ? biz.invoiceTemplateId
       : DEFAULT_DOCUMENT_TEMPLATE_ID;
     const accentColor = isCustomAccentUnlocked(tier)
-      ? biz.documentAccentColor ?? null
+      ? (biz.documentAccentColor ?? null)
       : null;
     const buffer = await this.proformaPdfService.generate(
       business.businessId,

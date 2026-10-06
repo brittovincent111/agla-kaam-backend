@@ -114,6 +114,56 @@ export class Lead {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'LeadSearchJob' })
   searchJobId?: Types.ObjectId;
 
+  @Prop({ default: false, index: true })
+  isEmailUnsubscribed: boolean;
+
+  @Prop()
+  unsubscribedAt?: Date;
+
+  @Prop({
+    type: String,
+    enum: ['NONE', 'HARD_BOUNCE', 'SOFT_BOUNCE', 'COMPLAINT'],
+    default: 'NONE',
+    index: true,
+  })
+  emailBounceStatus: 'NONE' | 'HARD_BOUNCE' | 'SOFT_BOUNCE' | 'COMPLAINT';
+
+  @Prop()
+  emailBouncedAt?: Date;
+
+  @Prop()
+  emailComplainedAt?: Date;
+
+  // WhatsApp marketing: tapped "Stop promotions" (or replied STOP), or Meta
+  // reported they stopped this business's marketing messages. Never sent to
+  // again, by any campaign.
+  @Prop({ default: false, index: true })
+  isWhatsappOptedOut: boolean;
+
+  @Prop()
+  whatsappOptedOutAt?: Date;
+
+  @Prop()
+  lastWhatsappAt?: Date;
+
+  @Prop()
+  whatsappRepliedAt?: Date;
+
+  // Where the email came from ('website' when read off the lead's own site),
+  // and when the website was last checked, so it isn't fetched again soon.
+  @Prop()
+  emailSource?: string;
+
+  @Prop()
+  emailLookupAt?: Date;
+
+  // Set when the lead's phone or email matches an Agla Kaam account.
+  @Prop()
+  installedAt?: Date;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Business' })
+  installedBusinessId?: Types.ObjectId;
+
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -125,4 +175,8 @@ LeadSchema.index({ source: 1, sourcePlaceId: 1 }, { sparse: true });
 LeadSchema.index({ phoneNormalized: 1 }, { sparse: true });
 LeadSchema.index({ businessNameNormalized: 1, cityNormalized: 1 });
 LeadSchema.index({ status: 1, city: 1, category: 1 });
+LeadSchema.index(
+  { email: 1, isEmailUnsubscribed: 1, emailBounceStatus: 1 },
+  { sparse: true },
+);
 LeadSchema.index({ createdAt: -1 });

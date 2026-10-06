@@ -2,11 +2,15 @@ import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Invoice, InvoiceDocument } from '../invoicing/schemas/invoice.schema';
-import { Quotation, QuotationDocument } from '../quotations/schemas/quotation.schema';
+import {
+  Quotation,
+  QuotationDocument,
+} from '../quotations/schemas/quotation.schema';
 
 export interface BillingItemSuggestion {
   name: string;
   description?: string;
+  hsnCode?: string;
   rate: number;
   taxRate: number;
 }
@@ -17,8 +21,10 @@ const MAX_SUGGESTIONS = 20;
 @Injectable()
 export class BillingItemsService {
   constructor(
-    @InjectModel(Invoice.name) private readonly invoiceModel: Model<InvoiceDocument>,
-    @InjectModel(Quotation.name) private readonly quotationModel: Model<QuotationDocument>,
+    @InjectModel(Invoice.name)
+    private readonly invoiceModel: Model<InvoiceDocument>,
+    @InjectModel(Quotation.name)
+    private readonly quotationModel: Model<QuotationDocument>,
   ) {}
 
   async findRecent(businessId: string): Promise<BillingItemSuggestion[]> {
@@ -45,6 +51,7 @@ export class BillingItemsService {
         entries.push({
           name: item.name,
           description: item.description,
+          hsnCode: item.hsnCode,
           rate: item.rate,
           taxRate: item.taxRate,
           date: invoice.invoiceDate,
@@ -56,6 +63,7 @@ export class BillingItemsService {
         entries.push({
           name: item.name,
           description: item.description,
+          hsnCode: item.hsnCode,
           rate: item.rate,
           taxRate: item.taxRate,
           date: quotation.quotationDate,
@@ -73,7 +81,13 @@ export class BillingItemsService {
       const key = entry.name.trim().toLowerCase();
       if (!key || seen.has(key)) continue;
       seen.add(key);
-      suggestions.push({ name: entry.name, description: entry.description, rate: entry.rate, taxRate: entry.taxRate });
+      suggestions.push({
+        name: entry.name,
+        description: entry.description,
+        hsnCode: entry.hsnCode,
+        rate: entry.rate,
+        taxRate: entry.taxRate,
+      });
       if (suggestions.length >= MAX_SUGGESTIONS) break;
     }
     return suggestions;

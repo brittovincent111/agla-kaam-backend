@@ -37,10 +37,7 @@ export class PurchasesService {
     private readonly businessesService: BusinessesService,
   ) {}
 
-  async create(
-    businessId: string,
-    dto: CreatePurchaseDto,
-  ): Promise<Purchase> {
+  async create(businessId: string, dto: CreatePurchaseDto): Promise<Purchase> {
     const business = await this.businessesService.findById(businessId);
     const currency = dto.currency || business?.currency || 'INR';
 
@@ -124,7 +121,9 @@ export class PurchasesService {
     const purchase = new this.purchaseModel({
       businessId: new Types.ObjectId(businessId),
       purchaseNumber,
-      supplierId: dto.supplierId ? new Types.ObjectId(dto.supplierId) : undefined,
+      supplierId: dto.supplierId
+        ? new Types.ObjectId(dto.supplierId)
+        : undefined,
       supplierName: dto.supplierName.trim(),
       supplierPhone: dto.supplierPhone?.trim(),
       supplierInvoiceNumber: dto.supplierInvoiceNumber?.trim(),
@@ -180,13 +179,20 @@ export class PurchasesService {
         .sort(pageSort('purchaseDate', 'desc'))
         .limit(limit + 1)
         .exec(),
-      cursor ? Promise.resolve(undefined) : this.purchaseModel.countDocuments(filter).exec(),
+      cursor
+        ? Promise.resolve(undefined)
+        : this.purchaseModel.countDocuments(filter).exec(),
     ]);
 
-    return buildPage(rows, limit, (row) => ({
-      v: row.purchaseDate.toISOString(),
-      id: (row._id as { toString(): string }).toString(),
-    }), total);
+    return buildPage(
+      rows,
+      limit,
+      (row) => ({
+        v: row.purchaseDate.toISOString(),
+        id: (row._id as { toString(): string }).toString(),
+      }),
+      total,
+    );
   }
 
   async findAll(businessId: string): Promise<Purchase[]> {
@@ -217,7 +223,10 @@ export class PurchasesService {
     const amountPaid = Math.min(purchase.totalAmount, alreadyPaid + amount);
     purchase.amountPaid = amountPaid;
     purchase.balanceDue = Math.max(0, purchase.totalAmount - amountPaid);
-    purchase.paymentStatus = derivePaymentStatus(purchase.totalAmount, amountPaid);
+    purchase.paymentStatus = derivePaymentStatus(
+      purchase.totalAmount,
+      amountPaid,
+    );
     return purchase.save();
   }
 

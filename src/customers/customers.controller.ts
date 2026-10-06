@@ -19,6 +19,7 @@ import {
   AuthenticatedBusiness,
 } from '../common/decorators/current-business.decorator';
 import { CustomersService } from './customers.service';
+import { BulkCustomersDto } from './dto/bulk-customers.dto';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
 import { ListCustomersDto } from './dto/list-customers.dto';
@@ -28,6 +29,20 @@ import { SetCustomerLocationDto } from './dto/set-customer-location.dto';
 @Controller('customers')
 export class CustomersController {
   constructor(private readonly customersService: CustomersService) {}
+
+  // Many at once: phonebook multi-select or rows pasted from a spreadsheet.
+  @Roles('owner')
+  @Post('bulk')
+  bulkCreate(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Body() dto: BulkCustomersDto,
+  ) {
+    return this.customersService.bulkCreate(
+      business.businessId,
+      dto.customers,
+      dto.source,
+    );
+  }
 
   @Roles('owner')
   @Post()
@@ -63,7 +78,10 @@ export class CustomersController {
 
   @Get()
   findAll(@CurrentBusiness() business: AuthenticatedBusiness) {
-    return this.customersService.findAllForViewer(business.businessId, business);
+    return this.customersService.findAllForViewer(
+      business.businessId,
+      business,
+    );
   }
 
   @Get(':id')
@@ -71,7 +89,11 @@ export class CustomersController {
     @CurrentBusiness() business: AuthenticatedBusiness,
     @Param('id') id: string,
   ) {
-    return this.customersService.findOneForViewer(business.businessId, id, business);
+    return this.customersService.findOneForViewer(
+      business.businessId,
+      id,
+      business,
+    );
   }
 
   // Deliberately not owner-only: the person standing at the customer's door
@@ -83,7 +105,12 @@ export class CustomersController {
     @Param('id') id: string,
     @Body() dto: SetCustomerLocationDto,
   ) {
-    return this.customersService.setDoorstepPin(business.businessId, id, business, dto);
+    return this.customersService.setDoorstepPin(
+      business.businessId,
+      id,
+      business,
+      dto,
+    );
   }
 
   @Delete(':id/location')
@@ -91,7 +118,11 @@ export class CustomersController {
     @CurrentBusiness() business: AuthenticatedBusiness,
     @Param('id') id: string,
   ) {
-    return this.customersService.clearDoorstepPin(business.businessId, id, business);
+    return this.customersService.clearDoorstepPin(
+      business.businessId,
+      id,
+      business,
+    );
   }
 
   @Roles('owner')

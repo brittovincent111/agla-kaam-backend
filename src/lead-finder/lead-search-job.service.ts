@@ -48,6 +48,7 @@ export class LeadSearchJobService {
       category: dto.category,
       keyword: dto.keyword || dto.query || '',
       requestedLimit: dto.limit || 50,
+      maxRequests: dto.maxRequests,
       processedCount: 0,
       newLeads: 0,
       duplicateLeads: 0,
@@ -112,14 +113,15 @@ export class LeadSearchJobService {
       // 1. Quota check
       const quota = await this.usageService.checkQuotaAvailable(job.provider);
       if (!quota.allowed) {
-        throw new Error(quota.reason || 'Daily or monthly provider quota exceeded.');
+        throw new Error(
+          quota.reason || 'Daily or monthly provider quota exceeded.',
+        );
       }
 
       const provider = this.providerRegistry.getProvider(job.provider);
 
       let cursor: string | undefined = undefined;
       let hasMore = true;
-      let collectedTotal = 0;
       let totalApiCost = 0;
       let totalRequests = 0;
 
@@ -128,7 +130,12 @@ export class LeadSearchJobService {
       let scannedTotal = 0;
       const maxScanLimit = Math.max(targetLimit * 3, 60);
 
-      while (hasMore && newLeadsCount < targetLimit && scannedTotal < maxScanLimit) {
+      while (
+        hasMore &&
+        newLeadsCount < targetLimit &&
+        scannedTotal < maxScanLimit
+      ) {
+        if (job.maxRequests && totalRequests >= job.maxRequests) break;
         if (this.cancelledJobs.has(jobId)) {
           this.cancelledJobs.delete(jobId);
           job.status = 'CANCELLED';
@@ -138,6 +145,16 @@ export class LeadSearchJobService {
         }
 
         const pageSize = 20;
+
+        // Each page is a billed Google call: check the allowance before every
+        // one, not just at the start, so one big search can't run past it.
+        if (totalRequests > 0) {
+          const left = await this.usageService.checkQuotaAvailable(job.provider);
+          if (!left.allowed) {
+            job.error = `Stopped early: ${left.reason}`;
+            break;
+          }
+        }
 
         // Retry loop with exponential backoff
         let result = null;
@@ -186,6 +203,9 @@ export class LeadSearchJobService {
 
         totalRequests += result.rawRequestsCount;
         totalApiCost += result.estimatedCostUsd;
+        // Counted now, so the next page's check (and other searches) see it,
+        // and a search that fails later is still counted.
+        await this.usageService.recordUsage(job.provider, result.rawRequestsCount, 0, result.estimatedCostUsd);
         cursor = result.nextPageCursor;
         hasMore = result.hasMore && Boolean(cursor);
 
@@ -194,10 +214,11 @@ export class LeadSearchJobService {
           scannedTotal++;
 
           try {
-            const dedupResult = await this.deduplicationService.findDuplicateAndEnrich(
-              candidate,
-              jobId,
-            );
+            const dedupResult =
+              await this.deduplicationService.findDuplicateAndEnrich(
+                candidate,
+                jobId,
+              );
 
             if (dedupResult.isDuplicate) {
               job.duplicateLeads += 1;
@@ -242,18 +263,17 @@ export class LeadSearchJobService {
         await job.save();
 
         // Rate limit throttle between pages (1000ms delay) to avoid 429
-        if (hasMore && newLeadsCount < targetLimit && scannedTotal < maxScanLimit) {
+        if (
+          hasMore &&
+          newLeadsCount < targetLimit &&
+          scannedTotal < maxScanLimit
+        ) {
           await new Promise((resolve) => setTimeout(resolve, 1000));
         }
       }
 
-      // Record telemetry in usage service
-      await this.usageService.recordUsage(
-        job.provider,
-        totalRequests,
-        job.newLeads,
-        totalApiCost,
-      );
+      // Calls were counted page by page; add the leads found.
+      await this.usageService.recordUsage(job.provider, 0, job.newLeads, 0);
 
       job.status = 'COMPLETED';
       job.completedAt = new Date();

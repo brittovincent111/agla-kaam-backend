@@ -6,7 +6,12 @@ import { InvoicingModule } from '../invoicing/invoicing.module';
 import { QuotationsModule } from '../quotations/quotations.module';
 
 @Module({
-  imports: [BusinessesModule, SubscriptionsModule, InvoicingModule, QuotationsModule],
+  imports: [
+    BusinessesModule,
+    SubscriptionsModule,
+    InvoicingModule,
+    QuotationsModule,
+  ],
   controllers: [DocumentTemplatesController],
 })
 export class DocumentTemplatesModule {}

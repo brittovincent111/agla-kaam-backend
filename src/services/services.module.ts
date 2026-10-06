@@ -7,10 +7,19 @@ import { CustomersModule } from '../customers/customers.module';
 import { TeamMembersModule } from '../team-members/team-members.module';
 import { AmcModule } from '../amc/amc.module';
 import { S3Service } from '../common/s3/s3.service';
+import {
+  Business,
+  BusinessSchema,
+} from '../businesses/schemas/business.schema';
+import { ServiceShareService } from './service-share.service';
+import { PublicServiceController } from './public-service.controller';
 
 @Module({
   imports: [
-    MongooseModule.forFeature([{ name: Service.name, schema: ServiceSchema }]),
+    MongooseModule.forFeature([
+      { name: Service.name, schema: ServiceSchema },
+      { name: Business.name, schema: BusinessSchema },
+    ]),
     // See customers.module.ts for why this needs forwardRef — CustomersModule
     // now imports this module back, to ask ServicesService which customers
     // have a service reassigned to a given technician.
@@ -18,9 +27,8 @@ import { S3Service } from '../common/s3/s3.service';
     TeamMembersModule,
     forwardRef(() => AmcModule),
   ],
-  controllers: [ServicesController],
-  providers: [ServicesService, S3Service],
-  exports: [ServicesService],
+  controllers: [ServicesController, PublicServiceController],
+  providers: [ServicesService, S3Service, ServiceShareService],
+  exports: [ServicesService, ServiceShareService],
 })
 export class ServicesModule {}
-

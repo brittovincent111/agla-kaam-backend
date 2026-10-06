@@ -30,6 +30,10 @@ import { PurchasesModule } from './purchases/purchases.module';
 import { SuppliersModule } from './suppliers/suppliers.module';
 import { ProformaInvoicesModule } from './proforma-invoices/proforma-invoices.module';
 import { LeadFinderModule } from './lead-finder/lead-finder.module';
+import { EmailCampaignsModule } from './email-campaigns/email-campaigns.module';
+import { WhatsappCampaignsModule } from './whatsapp-campaigns/whatsapp-campaigns.module';
+import { AutopilotModule } from './outreach-autopilot/autopilot.module';
+import { ReportsModule } from './reports/reports.module';
 import { validate } from './env.validation';
 
 @Module({
@@ -84,6 +88,10 @@ import { validate } from './env.validation';
     SuppliersModule,
     ProformaInvoicesModule,
     LeadFinderModule,
+    EmailCampaignsModule,
+    WhatsappCampaignsModule,
+    AutopilotModule,
+    ReportsModule,
   ],
   controllers: [HealthController],
   providers: [

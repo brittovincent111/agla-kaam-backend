@@ -56,16 +56,28 @@ describe('AMC visit accounting', () => {
 
   async function build(amc: any) {
     amcModel = {
-      find: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue([amc]) }),
-      findOne: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue(amc) }),
-      findById: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue(amc) }),
-      countDocuments: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue(0) }),
+      find: jest
+        .fn()
+        .mockReturnValue({ exec: jest.fn().mockResolvedValue([amc]) }),
+      findOne: jest
+        .fn()
+        .mockReturnValue({ exec: jest.fn().mockResolvedValue(amc) }),
+      findById: jest
+        .fn()
+        .mockReturnValue({ exec: jest.fn().mockResolvedValue(amc) }),
+      countDocuments: jest
+        .fn()
+        .mockReturnValue({ exec: jest.fn().mockResolvedValue(0) }),
     };
     serviceModel = {
-      create: jest.fn().mockImplementation((doc: any) =>
-        Promise.resolve({ ...doc, _id: new Types.ObjectId() }),
-      ),
-      findOne: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue(null) }),
+      create: jest
+        .fn()
+        .mockImplementation((doc: any) =>
+          Promise.resolve({ ...doc, _id: new Types.ObjectId() }),
+        ),
+      findOne: jest
+        .fn()
+        .mockReturnValue({ exec: jest.fn().mockResolvedValue(null) }),
       findById: jest.fn().mockImplementation(() => ({
         exec: jest.fn().mockResolvedValue({
           status: 'pending',
@@ -82,7 +94,10 @@ describe('AMC visit accounting', () => {
         { provide: getModelToken(Amc.name), useValue: amcModel },
         { provide: getModelToken(Service.name), useValue: serviceModel },
         { provide: CustomersService, useValue: { findOne: jest.fn() } },
-        { provide: SubscriptionsService, useValue: { getActiveTier: jest.fn() } },
+        {
+          provide: SubscriptionsService,
+          useValue: { getActiveTier: jest.fn() },
+        },
       ],
     }).compile();
 
@@ -96,7 +111,11 @@ describe('AMC visit accounting', () => {
       const serviceId = new Types.ObjectId();
       amc.visitSchedule[0].serviceId = serviceId;
 
-      await service.logVisit(BUSINESS_ID, AMC_ID.toString(), serviceId.toString());
+      await service.logVisit(
+        BUSINESS_ID,
+        AMC_ID.toString(),
+        serviceId.toString(),
+      );
 
       expect(amc.completedVisits).toBe(1);
       expect(amc.visitSchedule[0].status).toBe('completed');
@@ -110,8 +129,16 @@ describe('AMC visit accounting', () => {
       const serviceId = new Types.ObjectId();
       amc.visitSchedule[0].serviceId = serviceId;
 
-      await service.logVisit(BUSINESS_ID, AMC_ID.toString(), serviceId.toString());
-      await service.logVisit(BUSINESS_ID, AMC_ID.toString(), serviceId.toString());
+      await service.logVisit(
+        BUSINESS_ID,
+        AMC_ID.toString(),
+        serviceId.toString(),
+      );
+      await service.logVisit(
+        BUSINESS_ID,
+        AMC_ID.toString(),
+        serviceId.toString(),
+      );
 
       expect(amc.completedVisits).toBe(1);
     });

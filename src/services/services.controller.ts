@@ -23,11 +23,17 @@ import {
   AuthenticatedBusiness,
 } from '../common/decorators/current-business.decorator';
 import { ServicesService } from './services.service';
+import { TeamMembersService } from '../team-members/team-members.service';
 import { CreateServiceDto } from './dto/create-service.dto';
 import { ListServicesDto } from './dto/list-services.dto';
 import { RescheduleServiceDto } from './dto/reschedule-service.dto';
-import { CompleteServiceDto } from './dto/complete-service.dto';
+import {
+  CompleteServiceDto,
+  CorrectCollectionDto,
+} from './dto/complete-service.dto';
 import { ServiceLocationDto } from './dto/service-location.dto';
+import { CallbackDto } from './dto/callback.dto';
+import { ReassignManyDto } from './dto/reassign-many.dto';
 
 // Ceiling on a customer's service history in one response. Well past what
 // any real customer accumulates, and it keeps the endpoint bounded.
@@ -39,7 +45,10 @@ const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 @UseGuards(JwtAuthGuard)
 @Controller('services')
 export class ServicesController {
-  constructor(private readonly servicesService: ServicesService) {}
+  constructor(
+    private readonly servicesService: ServicesService,
+    private readonly teamMembersService: TeamMembersService,
+  ) {}
 
   @Post()
   create(
@@ -72,6 +81,73 @@ export class ServicesController {
     );
   }
 
+  // The owner's "Team day": one day's booked jobs split by technician.
+  // from/to: the local day as two instants (from inclusive, to exclusive).
+  @Get('day-board')
+  dayBoard(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
+    const start = from
+      ? new Date(from)
+      : new Date(new Date().setHours(0, 0, 0, 0));
+    const end = to ? new Date(to) : new Date(start.getTime() + 86_400_000);
+    if (
+      Number.isNaN(start.getTime()) ||
+      Number.isNaN(end.getTime()) ||
+      end <= start
+    ) {
+      throw new BadRequestException('Give a valid day.');
+    }
+    return this.servicesService.dayBoard(
+      business.businessId,
+      business,
+      start,
+      end,
+    );
+  }
+
+  @Post('reassign')
+  reassignMany(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Body() dto: ReassignManyDto,
+  ) {
+    return this.servicesService.reassignMany(
+      business.businessId,
+      business,
+      dto.serviceIds,
+      dto.assignedTechnicianId ?? null,
+    );
+  }
+
+  // A technician's own days worked, for their Me tab: ?month=2026-09.
+  @Get('my-work-log')
+  myWorkLog(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Query('month') month?: string,
+  ) {
+    if (business.role !== 'technician' || !business.teamMemberId) {
+      return { month: month ?? '', daysWorked: 0, jobs: 0, days: [] };
+    }
+    return this.teamMembersService.workLog(
+      business.businessId,
+      business.teamMemberId,
+      month,
+    );
+  }
+
+  // A technician's own cash still to hand over, for their Home screen.
+  @Get('my-cash')
+  myCash(@CurrentBusiness() business: AuthenticatedBusiness) {
+    return business.role === 'technician' && business.teamMemberId
+      ? this.teamMembersService.memberCash(
+          business.businessId,
+          business.teamMemberId,
+        )
+      : { cashInHand: 0, jobs: [], lastSettlement: null };
+  }
+
   @Get(':id')
   findOne(
     @CurrentBusiness() business: AuthenticatedBusiness,
@@ -92,6 +168,7 @@ export class ServicesController {
       { serviceDate: dto.serviceDate, nextServiceDate: dto.nextServiceDate },
       business,
       dto.assignedTechnicianId,
+      { book: dto.book, visitSlot: dto.visitSlot },
     );
   }
 
@@ -106,6 +183,32 @@ export class ServicesController {
       id,
       business,
       dto?.location,
+      dto?.completedAt,
+      {
+        interval: dto?.nextVisitInterval,
+        date: dto?.nextVisitDate,
+        skip: dto?.skipNextVisit,
+      },
+      dto?.collectionMethod
+        ? { method: dto.collectionMethod, amount: dto.collectionAmount }
+        : undefined,
+    );
+  }
+
+  @Patch(':id/collection')
+  correctCollection(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+    @Body() dto: CorrectCollectionDto,
+  ) {
+    return this.servicesService.correctCollection(
+      business.businessId,
+      id,
+      business,
+      {
+        method: dto.collectionMethod,
+        amount: dto.collectionAmount,
+      },
     );
   }
 
@@ -137,12 +240,41 @@ export class ServicesController {
     );
   }
 
+  // A return visit for a completed job ("it's leaking again").
+  @Post(':id/callback')
+  callback(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+    @Body() dto: CallbackDto,
+  ) {
+    return this.servicesService.createCallback(
+      business.businessId,
+      id,
+      dto,
+      business,
+    );
+  }
+
+  @Get(':id/callbacks')
+  async callbacks(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+  ) {
+    // Access-checked through the original job.
+    await this.servicesService.findOne(business.businessId, id, business);
+    return this.servicesService.findCallbacks(business.businessId, id);
+  }
+
   @Patch(':id/cancel')
   cancel(
     @CurrentBusiness() business: AuthenticatedBusiness,
     @Param('id') id: string,
   ) {
-    return this.servicesService.cancelService(business.businessId, id, business);
+    return this.servicesService.cancelService(
+      business.businessId,
+      id,
+      business,
+    );
   }
 
   @Get()
@@ -184,7 +316,9 @@ export class ServicesController {
   ) {
     if (!file) throw new BadRequestException('Image file is required');
     if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
-      throw new BadRequestException('Only JPEG, PNG, and WebP images are allowed');
+      throw new BadRequestException(
+        'Only JPEG, PNG, and WebP images are allowed',
+      );
     }
     if (kind !== 'before' && kind !== 'after') {
       throw new BadRequestException('Photo kind must be before or after');
@@ -277,4 +411,3 @@ export class ServicesController {
     return res?.send(sig.data);
   }
 }
-

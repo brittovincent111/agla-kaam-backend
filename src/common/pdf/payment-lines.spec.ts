@@ -51,7 +51,9 @@ describe('paymentLines', () => {
     expect(paymentLines({ name: 'CoolBreeze', acceptsCash: true })).toEqual([
       { label: 'Cash', value: 'Accepted' },
     ]);
-    expect(paymentLines({ name: 'CoolBreeze', acceptsCash: false })).toEqual([]);
+    expect(paymentLines({ name: 'CoolBreeze', acceptsCash: false })).toEqual(
+      [],
+    );
   });
 
   it('prints nothing when the business has switched the block off', () => {
@@ -93,7 +95,12 @@ describe('paymentLines', () => {
       paymentAccountCode: 'HDFC0001234',
       acceptsCash: true,
     });
-    expect(lines.map((line) => line.label)).toEqual(['UPI', 'Bank', 'IFSC', 'Cash']);
+    expect(lines.map((line) => line.label)).toEqual([
+      'UPI',
+      'Bank',
+      'IFSC',
+      'Cash',
+    ]);
   });
 });
 

@@ -11,23 +11,46 @@ import {
 export class ProviderUsageService {
   private readonly logger = new Logger(ProviderUsageService.name);
 
-  // Default safety caps: 250 requests/day, 3000 requests/month unless overridden
+  // Google bills our searches as Text Search Enterprise (they ask for phone,
+  // website and rating). Free each month: 7,000 on the India price list
+  // (billing account in India), 1,000 on the global list — set
+  // LEAD_FINDER_FREE_MONTHLY to match the billing account; 1,000 if unset.
+  // The monthly cap never goes above the free amount unless
+  // LEAD_FINDER_ALLOW_PAID=true, whatever LEAD_FINDER_MONTHLY_LIMIT says.
+  static readonly GOOGLE_FREE_MONTHLY = 1000;
+  readonly freeMonthly: number;
   private readonly dailyMaxRequests: number;
   private readonly monthlyMaxRequests: number;
+  readonly allowPaid: boolean;
 
   constructor(
     @InjectModel(LeadProviderUsage.name)
     private readonly usageModel: Model<LeadProviderUsageDocument>,
     private readonly configService: ConfigService,
   ) {
-    this.dailyMaxRequests = parseInt(
-      this.configService.get<string>('LEAD_FINDER_DAILY_LIMIT') || '250',
-      10,
+    this.allowPaid = this.configService.get<string>('LEAD_FINDER_ALLOW_PAID') === 'true';
+    this.freeMonthly =
+      parseInt(this.configService.get<string>('LEAD_FINDER_FREE_MONTHLY') || '', 10) ||
+      ProviderUsageService.GOOGLE_FREE_MONTHLY;
+    // Stay well clear of the free amount (default 20% gap): Google counts the
+    // month in Pacific time, retries and other projects on the same billing
+    // account count too, so running right up to it risks a charge.
+    const gapPct = Math.max(
+      0,
+      Math.min(90, parseInt(this.configService.get<string>('LEAD_FINDER_SAFETY_GAP_PERCENT') || '', 10) || 20),
     );
-    this.monthlyMaxRequests = parseInt(
-      this.configService.get<string>('LEAD_FINDER_MONTHLY_LIMIT') || '3000',
-      10,
+    const safeFree = Math.floor((this.freeMonthly * (100 - gapPct)) / 100);
+    const monthly = parseInt(this.configService.get<string>('LEAD_FINDER_MONTHLY_LIMIT') || '', 10) || safeFree;
+    this.monthlyMaxRequests = this.allowPaid ? monthly : Math.min(monthly, safeFree);
+    this.dailyMaxRequests = Math.min(
+      parseInt(this.configService.get<string>('LEAD_FINDER_DAILY_LIMIT') || '', 10) || Math.ceil(safeFree / 30),
+      this.monthlyMaxRequests,
     );
+    if (!this.allowPaid && monthly > safeFree) {
+      this.logger.warn(
+        `LEAD_FINDER_MONTHLY_LIMIT=${monthly} is above ${safeFree} (Google's free ${this.freeMonthly} minus a ${gapPct}% gap); capped. Set LEAD_FINDER_ALLOW_PAID=true to allow paid searches.`,
+      );
+    }
   }
 
   private getDateKeys(): { dateKey: string; monthKey: string } {
@@ -37,7 +60,9 @@ export class ProviderUsageService {
     return { dateKey, monthKey };
   }
 
-  async checkQuotaAvailable(provider = 'google_places'): Promise<{ allowed: boolean; reason?: string }> {
+  async checkQuotaAvailable(
+    provider = 'google_places',
+  ): Promise<{ allowed: boolean; reason?: string }> {
     const { dateKey, monthKey } = this.getDateKeys();
 
     const dailyRecord = await this.usageModel.findOne({ provider, dateKey });
@@ -62,6 +87,20 @@ export class ProviderUsageService {
     }
 
     return { allowed: true };
+  }
+
+  get monthlyLimit(): number {
+    return this.monthlyMaxRequests;
+  }
+
+  /** Provider calls so far this calendar month (UTC month, as recorded). */
+  async monthRequests(provider = 'google_places'): Promise<number> {
+    const { monthKey } = this.getDateKeys();
+    const agg = await this.usageModel.aggregate([
+      { $match: { provider, monthKey } },
+      { $group: { _id: null, total: { $sum: '$requestCount' } } },
+    ]);
+    return agg[0]?.total || 0;
   }
 
   async recordUsage(
@@ -125,7 +164,9 @@ export class ProviderUsageService {
     return {
       todayRequests,
       todayLeads: todayDoc?.leadsDiscovered || 0,
-      todayEstimatedCostUsd: Number((todayDoc?.estimatedCostUsd || 0).toFixed(3)),
+      todayEstimatedCostUsd: Number(
+        (todayDoc?.estimatedCostUsd || 0).toFixed(3),
+      ),
       monthRequests: monthAgg[0]?.totalRequests || 0,
       monthEstimatedCostUsd: monthCostUsd,
       dailyLimit: this.dailyMaxRequests,

@@ -74,21 +74,35 @@ describe('buildPalette', () => {
   it.each(accents)('keeps text on the accent readable for %s', (accent) => {
     const palette = buildPalette(accent);
     // Primary text on the band must clear WCAG AA for large text.
-    expect(contrast(palette.onPrimary, palette.primary)).toBeGreaterThanOrEqual(3);
+    expect(contrast(palette.onPrimary, palette.primary)).toBeGreaterThanOrEqual(
+      3,
+    );
     // Secondary text on the band has to separate from it too — this is the
     // token that was yellow-on-yellow when it always lightened.
-    expect(contrast(palette.onPrimaryMuted, palette.primary)).toBeGreaterThanOrEqual(1.8);
+    expect(
+      contrast(palette.onPrimaryMuted, palette.primary),
+    ).toBeGreaterThanOrEqual(1.8);
   });
 
-  it.each(accents)('keeps the accent readable as text on white for %s', (accent) => {
-    const palette = buildPalette(accent);
-    expect(contrast(palette.primaryInk, '#FFFFFF')).toBeGreaterThanOrEqual(4.5);
-  });
+  it.each(accents)(
+    'keeps the accent readable as text on white for %s',
+    (accent) => {
+      const palette = buildPalette(accent);
+      expect(contrast(palette.primaryInk, '#FFFFFF')).toBeGreaterThanOrEqual(
+        4.5,
+      );
+    },
+  );
 
-  it.each(accents)('keeps tinted text readable on its own tint for %s', (accent) => {
-    const palette = buildPalette(accent);
-    expect(contrast(palette.tintText, palette.tintBg)).toBeGreaterThanOrEqual(4.5);
-  });
+  it.each(accents)(
+    'keeps tinted text readable on its own tint for %s',
+    (accent) => {
+      const palette = buildPalette(accent);
+      expect(contrast(palette.tintText, palette.tintBg)).toBeGreaterThanOrEqual(
+        4.5,
+      );
+    },
+  );
 
   it('leaves the neutral signal colours alone whatever the accent', () => {
     const teal = buildPalette('#0F6E56');

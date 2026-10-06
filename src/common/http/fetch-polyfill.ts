@@ -45,7 +45,9 @@ function shimFetch(
         path: `${url.pathname}${url.search}`,
         method: init.method ?? 'GET',
         headers: {
-          ...(init.body ? { 'Content-Length': Buffer.byteLength(init.body) } : {}),
+          ...(init.body
+            ? { 'Content-Length': Buffer.byteLength(init.body) }
+            : {}),
           ...(init.headers ?? {}),
         },
       },

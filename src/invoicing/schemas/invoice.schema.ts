@@ -1,6 +1,9 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
-import { INVOICE_STATUSES, InvoiceStatus } from '../../common/constants/invoice-options';
+import {
+  INVOICE_STATUSES,
+  InvoiceStatus,
+} from '../../common/constants/invoice-options';
 import { InvoiceItem, InvoiceItemSchema } from './invoice-item.schema';
 
 export type InvoiceDocument = HydratedDocument<Invoice>;
@@ -22,13 +25,22 @@ export class Invoice {
   @Prop({ required: true })
   dueDate: Date;
 
-  @Prop({ required: true, enum: INVOICE_STATUSES, default: 'draft', index: true })
+  @Prop({
+    required: true,
+    enum: INVOICE_STATUSES,
+    default: 'draft',
+    index: true,
+  })
   status: InvoiceStatus;
 
   @Prop({ required: true, default: 'INR', uppercase: true, trim: true })
   currency: string;
 
-  @Prop({ required: true, default: 'gst', enum: ['gst', 'vat', 'sales_tax', 'none'] })
+  @Prop({
+    required: true,
+    default: 'gst',
+    enum: ['gst', 'vat', 'sales_tax', 'none'],
+  })
   taxType: string;
 
   @Prop({ type: [InvoiceItemSchema], default: [] })
@@ -63,8 +75,28 @@ export class Invoice {
   // Business.defaultInvoiceTerms when a new invoice is created.
   @Prop({ trim: true, maxlength: 2000 })
   termsAndConditions?: string;
+
+  // When a payment reminder was last sent for this invoice.
+  @Prop()
+  lastRemindedAt?: Date;
+
+  // What sending this invoice took out of the inventory catalogue, so that
+  // cancelling it can put back exactly that — not whatever the lines say
+  // after a later edit. Empty for drafts and for invoices that matched no
+  // tracked item.
+  @Prop({
+    type: [{ _id: false, itemId: String, quantity: Number }],
+    default: [],
+  })
+  stockDeductions: { itemId: string; quantity: number }[];
 }
 
 export const InvoiceSchema = SchemaFactory.createForClass(Invoice);
 InvoiceSchema.index({ businessId: 1, invoiceNumber: 1 }, { unique: true });
 InvoiceSchema.index({ businessId: 1, dueDate: 1 });
+
+// Paging and every listing sort on invoiceDate desc; previously only dueDate
+// and invoiceNumber were indexed, so the sort ran in memory.
+InvoiceSchema.index({ businessId: 1, invoiceDate: -1, _id: -1 });
+// The billing tab on a customer card.
+InvoiceSchema.index({ businessId: 1, customerId: 1, invoiceDate: -1 });

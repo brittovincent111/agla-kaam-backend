@@ -1,6 +1,7 @@
 import { plainToInstance } from 'class-transformer';
 import {
   IsIn,
+  IsUrl,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -42,6 +43,13 @@ class EnvironmentVariables {
   @IsString()
   FREE_TIER_CUSTOMER_LIMIT?: string;
 
+  // The address customers can reach, e.g. https://agla-kaam-api.velocrew.in
+  // (no /api). Used to build the invoice pay links and service record links
+  // sent on WhatsApp. Without it they use the host the request came in on.
+  @IsOptional()
+  @IsUrl({ require_tld: true, protocols: ['https'], require_protocol: true })
+  PUBLIC_API_URL?: string;
+
   @IsString()
   @IsNotEmpty()
   RAZORPAY_KEY_ID: string;
@@ -74,13 +82,13 @@ class EnvironmentVariables {
   @IsNotEmpty()
   AWS_SECRET_ACCESS_KEY: string;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  EMAIL_FROM: string;
+  EMAIL_FROM?: string;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  SMTP_HOST: string;
+  SMTP_HOST?: string;
 
   @IsOptional()
   @IsString()
@@ -90,13 +98,13 @@ class EnvironmentVariables {
   @IsString()
   SMTP_SECURE?: string;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  SMTP_USER: string;
+  SMTP_USER?: string;
 
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  SMTP_PASS: string;
+  SMTP_PASS?: string;
 
   // Optional: Google Play purchase verification isn't required to boot —
   // only /subscriptions/verify-play-purchase needs it, and it doesn't exist
@@ -140,6 +148,20 @@ class EnvironmentVariables {
   @IsIn(['production', 'sandbox'])
   APPLE_IAP_ENVIRONMENT?: string;
 
+  // Optional: Sign in with Apple refresh-token exchange and revoke (see
+  // AppleSignInService). Unset, both are skipped with a warning.
+  @IsOptional()
+  @IsString()
+  APPLE_TEAM_ID?: string;
+
+  @IsOptional()
+  @IsString()
+  APPLE_SIGNIN_KEY_ID?: string;
+
+  @IsOptional()
+  @IsString()
+  APPLE_SIGNIN_PRIVATE_KEY?: string;
+
   @IsOptional()
   @IsString()
   GOOGLE_PLACES_API_KEY?: string;
@@ -151,6 +173,151 @@ class EnvironmentVariables {
   @IsOptional()
   @IsString()
   LEAD_FINDER_MONTHLY_LIMIT?: string;
+
+  // WhatsApp Cloud API (marketing campaigns from the business number)
+  @IsOptional()
+  @IsString()
+  WHATSAPP_ACCESS_TOKEN?: string;
+
+  @IsOptional()
+  @IsString()
+  WHATSAPP_PHONE_NUMBER_ID?: string;
+
+  @IsOptional()
+  @IsString()
+  WHATSAPP_WABA_ID?: string;
+
+  @IsOptional()
+  @IsString()
+  WHATSAPP_APP_SECRET?: string;
+
+  @IsOptional()
+  @IsString()
+  WHATSAPP_WEBHOOK_VERIFY_TOKEN?: string;
+
+  @IsOptional()
+  @IsString()
+  WHATSAPP_GRAPH_VERSION?: string;
+
+  @IsOptional()
+  @IsString()
+  WHATSAPP_GRAPH_BASE_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  WHATSAPP_OVERRIDE_TO?: string;
+
+  @IsOptional()
+  @IsString()
+  WHATSAPP_DAILY_LIMIT?: string;
+
+  @IsOptional()
+  @IsString()
+  GOOGLE_PLACES_BASE_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  LEAD_FINDER_FREE_MONTHLY?: string;
+
+  // How far below the free amount searches stop (percent, default 20).
+  @IsOptional()
+  @IsString()
+  LEAD_FINDER_SAFETY_GAP_PERCENT?: string;
+
+  @IsOptional()
+  @IsString()
+  GOOGLE_PLACES_COST_PER_CALL_USD?: string;
+
+  // Allow Google searches past the free monthly amount (billed).
+  @IsOptional()
+  @IsString()
+  LEAD_FINDER_ALLOW_PAID?: string;
+
+  // Monthly outreach budget in rupees (see outreach-budget.ts).
+  @IsOptional()
+  @IsString()
+  OUTREACH_MONTHLY_BUDGET_INR?: string;
+
+  @IsOptional()
+  @IsString()
+  OUTREACH_BUDGET_GAP_PERCENT?: string;
+
+  @IsOptional()
+  @IsString()
+  WHATSAPP_COST_PER_MESSAGE_INR?: string;
+
+  // Outreach sends only inside these hours/days, India time (see send-window.ts).
+  @IsOptional()
+  @IsString()
+  OUTREACH_SEND_HOURS?: string;
+
+  @IsOptional()
+  @IsString()
+  OUTREACH_SEND_DAYS?: string;
+
+  @IsOptional()
+  @IsString()
+  EMAIL_DAILY_LIMIT?: string;
+
+  @IsOptional()
+  @IsString()
+  WHATSAPP_RATE_PER_SECOND?: string;
+
+  // AWS SES & Marketing Campaign Configuration
+  @IsOptional()
+  @IsString()
+  AWS_SES_REGION?: string;
+
+  @IsOptional()
+  @IsString()
+  AWS_SES_ACCESS_KEY_ID?: string;
+
+  @IsOptional()
+  @IsString()
+  AWS_SES_SECRET_ACCESS_KEY?: string;
+
+  @IsOptional()
+  @IsString()
+  SES_FROM_EMAIL?: string;
+
+  @IsOptional()
+  @IsString()
+  SES_REPLY_TO_EMAIL?: string;
+
+  @IsOptional()
+  @IsString()
+  SES_RATE_LIMIT_PER_SECOND?: string;
+
+  @IsOptional()
+  @IsString()
+  SES_BATCH_SIZE?: string;
+
+  @IsOptional()
+  @IsString()
+  SES_MAX_RETRIES?: string;
+
+  @IsOptional()
+  @IsString()
+  SES_RETRY_DELAY_MS?: string;
+
+  @IsOptional()
+  @IsString()
+  UNSUBSCRIBE_BASE_URL?: string;
+
+  // Development/testing override: when set, all outgoing emails are redirected to this address
+  @IsOptional()
+  @IsString()
+  EMAIL_OVERRIDE_TO?: string;
+
+  // Active email provider: 'ses' (default) or 'smtp'
+  @IsOptional()
+  @IsString()
+  EMAIL_PROVIDER?: string;
+
+  // Expected AWS Account ID for cross-account sanity checks
+  @IsOptional()
+  @IsString()
+  AWS_EXPECTED_ACCOUNT_ID?: string;
 }
 
 // Wired into ConfigModule.forRoot({ validate }) — throwing here aborts

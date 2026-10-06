@@ -1,6 +1,7 @@
 import { Types } from 'mongoose';
 import { Invoice } from '../invoicing/schemas/invoice.schema';
 import { Quotation } from '../quotations/schemas/quotation.schema';
+import { addMonths } from '../common/constants/service-options';
 
 // Fixed dummy content for template previews — rendered with the viewing
 // business's own name/address/GSTIN so the preview looks like a real
@@ -17,11 +18,7 @@ import { Quotation } from '../quotations/schemas/quotation.schema';
 export const SAMPLE_SERVICE_CONTEXT = {
   technicianName: 'Arun Kumar',
   serviceDate: new Date(),
-  nextServiceDate: (() => {
-    const next = new Date();
-    next.setMonth(next.getMonth() + 6);
-    return next;
-  })(),
+  nextServiceDate: addMonths(new Date(), 6),
   jobReference: '#4A7F21',
   serviceNotes: 'Outdoor coil cleaned; cooling checked after gas top-up.',
 };
@@ -29,7 +26,8 @@ export const SAMPLE_SERVICE_CONTEXT = {
 export const SAMPLE_CUSTOMER = {
   name: 'Ravi Kumar',
   phone: '+91 98765 43210',
-  address: 'Door No 14/220, Chittilappilly Building, Near Poothole Junction, Thrissur, Kerala 680004',
+  address:
+    'Door No 14/220, Chittilappilly Building, Near Poothole Junction, Thrissur, Kerala 680004',
   gstin: '32ABCDE1234F1Z5',
 };
 
@@ -43,8 +41,22 @@ const SAMPLE_ITEMS = [
     amount: 599,
     taxAmount: 107.82,
   },
-  { name: 'Gas Refill', quantity: 1, rate: 1200, taxRate: 18, amount: 1200, taxAmount: 216 },
-  { name: 'Service call charge', quantity: 1, rate: 150, taxRate: 0, amount: 150, taxAmount: 0 },
+  {
+    name: 'Gas Refill',
+    quantity: 1,
+    rate: 1200,
+    taxRate: 18,
+    amount: 1200,
+    taxAmount: 216,
+  },
+  {
+    name: 'Service call charge',
+    quantity: 1,
+    rate: 150,
+    taxRate: 0,
+    amount: 150,
+    taxAmount: 0,
+  },
 ];
 
 const SUBTOTAL = SAMPLE_ITEMS.reduce((sum, item) => sum + item.amount, 0);

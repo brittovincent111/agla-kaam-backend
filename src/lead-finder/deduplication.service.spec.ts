@@ -37,16 +37,24 @@ describe('DeduplicationService', () => {
     });
 
     it('normalizes 13-digit number with 091 prefix for India', () => {
-      expect(service.normalizePhoneNumber('0919876543210')).toBe('+919876543210');
+      expect(service.normalizePhoneNumber('0919876543210')).toBe(
+        '+919876543210',
+      );
     });
 
     it('preserves existing +91 international prefix', () => {
-      expect(service.normalizePhoneNumber('+91 98765 43210')).toBe('+919876543210');
+      expect(service.normalizePhoneNumber('+91 98765 43210')).toBe(
+        '+919876543210',
+      );
     });
 
     it('handles international phone numbers', () => {
-      expect(service.normalizePhoneNumber('+971 50 123 4567', 'UAE')).toBe('+971501234567');
-      expect(service.normalizePhoneNumber('00971501234567', 'UAE')).toBe('+971501234567');
+      expect(service.normalizePhoneNumber('+971 50 123 4567', 'UAE')).toBe(
+        '+971501234567',
+      );
+      expect(service.normalizePhoneNumber('00971501234567', 'UAE')).toBe(
+        '+971501234567',
+      );
     });
 
     it('returns undefined for invalid or short phone numbers', () => {
@@ -58,20 +66,26 @@ describe('DeduplicationService', () => {
 
   describe('normalizeBusinessName', () => {
     it('strips common legal entities and stopwords', () => {
-      expect(service.normalizeBusinessName('Apex Air Conditioning Services Pvt Ltd')).toBe(
-        'apex air conditioning',
-      );
-      expect(service.normalizeBusinessName('QuickFix Appliances Repair & Service Co')).toBe(
-        'quickfix appliances and',
-      );
-      expect(service.normalizeBusinessName('Smart RO Solutions & Water Care Center')).toBe(
-        'smart ro and water',
-      );
+      expect(
+        service.normalizeBusinessName('Apex Air Conditioning Services Pvt Ltd'),
+      ).toBe('apex air conditioning');
+      expect(
+        service.normalizeBusinessName(
+          'QuickFix Appliances Repair & Service Co',
+        ),
+      ).toBe('quickfix appliances and');
+      expect(
+        service.normalizeBusinessName('Smart RO Solutions & Water Care Center'),
+      ).toBe('smart ro and water');
     });
 
     it('handles amp and special characters', () => {
-      expect(service.normalizeBusinessName('A & B Electrical Works')).toBe('a and b electrical');
-      expect(service.normalizeBusinessName('A&amp;B Plumbing Hub')).toBe('a and b plumbing');
+      expect(service.normalizeBusinessName('A & B Electrical Works')).toBe(
+        'a and b electrical',
+      );
+      expect(service.normalizeBusinessName('A&amp;B Plumbing Hub')).toBe(
+        'a and b plumbing',
+      );
     });
   });
 

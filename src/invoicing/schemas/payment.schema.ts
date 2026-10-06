@@ -1,6 +1,9 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
-import { PAYMENT_METHODS, PaymentMethod } from '../../common/constants/invoice-options';
+import {
+  PAYMENT_METHODS,
+  PaymentMethod,
+} from '../../common/constants/invoice-options';
 
 export type PaymentDocument = HydratedDocument<Payment>;
 
@@ -32,3 +35,6 @@ export class Payment {
 }
 
 export const PaymentSchema = SchemaFactory.createForClass(Payment);
+
+// The payment timeline on an invoice.
+PaymentSchema.index({ businessId: 1, invoiceId: 1, paymentDate: -1 });

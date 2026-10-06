@@ -45,4 +45,10 @@ export class StartLeadSearchDto {
   @IsOptional()
   @IsString()
   provider?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(10)
+  maxRequests?: number;
 }

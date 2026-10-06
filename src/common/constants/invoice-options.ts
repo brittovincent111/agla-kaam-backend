@@ -70,7 +70,10 @@ function round2(value: number): number {
 // Uses largest-remainder apportionment rather than rounding each share
 // independently: rounding independently loses or gains paise, and the shares
 // then would not add up to the discount the customer was promised.
-function allocateDiscount(amounts: number[], discount: number): number[] {
+export function allocateDiscount(
+  amounts: number[],
+  discount: number,
+): number[] {
   const subtotal = amounts.reduce((sum, amount) => sum + amount, 0);
   if (discount <= 0 || subtotal <= 0) return amounts.map(() => 0);
 
@@ -79,10 +82,15 @@ function allocateDiscount(amounts: number[], discount: number): number[] {
   const exact = amounts.map((amount) => (amount / subtotal) * capped);
   const floored = exact.map((value) => Math.floor(value * 100) / 100);
 
-  let remainder = round2(capped - floored.reduce((sum, value) => sum + value, 0));
+  let remainder = round2(
+    capped - floored.reduce((sum, value) => sum + value, 0),
+  );
   // Hand the leftover paise to the lines with the largest fractional part.
   const order = exact
-    .map((value, index) => ({ index, frac: value * 100 - Math.floor(value * 100) }))
+    .map((value, index) => ({
+      index,
+      frac: value * 100 - Math.floor(value * 100),
+    }))
     .sort((a, b) => b.frac - a.frac);
 
   const shares = [...floored];

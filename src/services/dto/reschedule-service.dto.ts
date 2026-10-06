@@ -1,4 +1,11 @@
-import { IsDateString, IsMongoId, IsOptional } from 'class-validator';
+import {
+  IsBoolean,
+  IsDateString,
+  IsMongoId,
+  IsOptional,
+  IsString,
+  Matches,
+} from 'class-validator';
 
 export class RescheduleServiceDto {
   // When THIS job is due. Moving it is what the Services list follows:
@@ -29,4 +36,15 @@ export class RescheduleServiceDto {
   @IsOptional()
   @IsMongoId()
   assignedTechnicianId?: string | null;
+
+  // Book a due visit: the customer agreed to the date.
+  @IsOptional()
+  @IsBoolean()
+  book?: boolean;
+
+  // 'morning' | 'afternoon' | 'evening', or 'HH:mm'; '' clears it.
+  @IsOptional()
+  @IsString()
+  @Matches(/^(|morning|afternoon|evening|([01]\d|2[0-3]):[0-5]\d)$/)
+  visitSlot?: string;
 }
