@@ -1,8 +1,18 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { Purchase, PurchaseDocument } from './schemas/purchase.schema';
-import { CreatePurchaseDto } from './dto/create-purchase.dto';
+import {
+  Purchase,
+  PurchaseDocument,
+  PurchaseItem,
+} from './schemas/purchase.schema';
+import { CreatePurchaseDto, PurchaseItemDto } from './dto/create-purchase.dto';
+import { UpdatePurchaseDto } from './dto/update-purchase.dto';
 import { InventoryService } from '../inventory/inventory.service';
 import { BusinessesService } from '../businesses/businesses.service';
 import {
@@ -45,64 +55,17 @@ export class PurchasesService {
     const serial =
       business?.purchaseNextSerial ||
       (await this.purchaseModel.countDocuments({
-        businessId: new Types.ObjectId(businessId),
+        businessId: idFilter(businessId),
       })) + 1;
     const purchaseNumber = `${prefix}${new Date().getFullYear()}-${String(serial).padStart(3, '0')}`;
     await this.businessesService.update(businessId, {
       purchaseNextSerial: serial + 1,
     });
 
-    let totalAmount = 0;
-    const items = [];
+    const { items, totalAmount } = await this.buildItems(businessId, dto.items);
 
-    for (const item of dto.items) {
-      const amount = item.quantity * item.costPrice;
-      totalAmount += amount;
-
-      let validItemId: Types.ObjectId | undefined;
-      if (item.itemId && Types.ObjectId.isValid(item.itemId)) {
-        validItemId = new Types.ObjectId(item.itemId);
-      } else {
-        // Automatically create in Inventory Catalog if it's a custom uncatalogued item
-        try {
-          const newItem = await this.inventoryService.create(businessId, {
-            name: item.name.trim(),
-            hsnCode: item.hsnCode?.trim().toUpperCase(),
-            unit: 'pcs',
-            salePrice: item.costPrice > 0 ? item.costPrice * 1.2 : 0,
-            costPrice: item.costPrice,
-            stockQuantity: 0,
-            minStockAlert: 5,
-            isService: false,
-          });
-          validItemId = new Types.ObjectId((newItem as any)._id);
-        } catch {
-          // If creation fails, proceed without linking itemId
-        }
-      }
-
-      items.push({
-        itemId: validItemId,
-        name: item.name,
-        hsnCode: item.hsnCode?.trim().toUpperCase(),
-        quantity: item.quantity,
-        costPrice: item.costPrice,
-        amount,
-      });
-
-      // Auto increment stock quantities in Inventory Catalog if validItemId is set
-      if (validItemId) {
-        try {
-          await this.inventoryService.adjustStock(
-            businessId,
-            validItemId.toString(),
-            item.quantity,
-          );
-        } catch {
-          // Continue if stock adjustment fails
-        }
-      }
-    }
+    // Auto increment stock quantities in Inventory Catalog for linked lines
+    await this.moveStock(businessId, this.stockDeltas([], items));
 
     // An explicit amount wins; otherwise it follows the status the user
     // chose, so the common "paid at the counter" and "on credit" cases need
@@ -139,6 +102,229 @@ export class PurchasesService {
     });
 
     return purchase.save();
+  }
+
+  /**
+   * Corrects a logged purchase: supplier, bill details, lines and the amount
+   * paid. The purchase number never changes.
+   *
+   * Stock follows the lines: what the old lines added comes back out and
+   * what the new lines add goes in, netted per inventory item so an
+   * unchanged line moves nothing. Netting matters because adjustStock floors
+   * at 0 — taking 10 out of an item that has since sold down to 2 would floor
+   * it at 0 and then putting the same 10 back would read 10, not 2.
+   *
+   * When a line is cut below what has already been sold since, the item's
+   * stock is floored at 0 by adjustStock rather than going negative; the
+   * edit still goes through.
+   */
+  async update(
+    businessId: string,
+    id: string,
+    dto: UpdatePurchaseDto,
+  ): Promise<Purchase> {
+    const purchase = await this.findOwned(businessId, id);
+
+    const built = dto.items
+      ? await this.buildItems(businessId, dto.items)
+      : null;
+    const totalAmount = built ? built.totalAmount : purchase.totalAmount;
+    const amountPaid = Math.min(
+      totalAmount,
+      Math.max(0, dto.amountPaid ?? purchase.amountPaid ?? 0),
+    );
+
+    const set: Record<string, unknown> = {
+      totalAmount,
+      amountPaid,
+      balanceDue: Math.max(0, totalAmount - amountPaid),
+      paymentStatus: derivePaymentStatus(totalAmount, amountPaid),
+    };
+    const unset: Record<string, ''> = {};
+    if (built) set.items = built.items;
+    if (dto.supplierName !== undefined) {
+      if (!dto.supplierName.trim()) {
+        throw new BadRequestException('Supplier name cannot be empty');
+      }
+      set.supplierName = dto.supplierName.trim();
+    }
+    if (dto.supplierId) set.supplierId = new Types.ObjectId(dto.supplierId);
+    if (dto.purchaseDate) set.purchaseDate = new Date(dto.purchaseDate);
+    if (dto.paymentMethod) set.paymentMethod = dto.paymentMethod;
+    // An empty string clears an optional text field; leaving it out keeps it.
+    for (const key of [
+      'supplierPhone',
+      'supplierInvoiceNumber',
+      'notes',
+    ] as const) {
+      const value = dto[key];
+      if (value === undefined) continue;
+      if (value.trim()) set[key] = value.trim();
+      else unset[key] = '';
+    }
+
+    // Written only if nobody else changed the purchase since it was read
+    // (an edit, a payment): two edits racing on the same old lines would
+    // otherwise both take their stock back out. No transactions here, so the
+    // stock moves after the write, best-effort per item like create().
+    const updated = await this.purchaseModel
+      .findOneAndUpdate(
+        {
+          _id: purchase._id,
+          businessId: idFilter(businessId),
+          updatedAt: purchase.get('updatedAt') ?? { $exists: false },
+        },
+        { $set: set, ...(Object.keys(unset).length ? { $unset: unset } : {}) },
+        { new: true, runValidators: true },
+      )
+      .exec();
+    if (!updated) {
+      throw new ConflictException(
+        'This purchase was changed while you were editing it. Reload it and try again.',
+      );
+    }
+
+    if (built) {
+      await this.moveStock(
+        businessId,
+        this.stockDeltas(purchase.items, built.items),
+      );
+    }
+    return updated;
+  }
+
+  /**
+   * Deletes a purchase and takes the stock its lines added back out of
+   * inventory (floored at 0 by adjustStock, as in update()).
+   *
+   * The delete is the atomic step and the stock follows from the document it
+   * removed, so two deletes racing cannot both take the stock out.
+   */
+  async remove(businessId: string, id: string): Promise<void> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new NotFoundException('Purchase bill not found');
+    }
+    const removed = await this.purchaseModel
+      .findOneAndDelete({
+        _id: new Types.ObjectId(id),
+        businessId: idFilter(businessId),
+      })
+      .exec();
+    if (!removed) throw new NotFoundException('Purchase bill not found');
+    await this.moveStock(businessId, this.stockDeltas(removed.items, []));
+  }
+
+  /**
+   * Turns submitted lines into stored ones. A line not picked from the
+   * catalogue is added to it first (at stock 0, so moveStock() can then add
+   * the purchased quantity like any other line). Moves no stock itself.
+   */
+  private async buildItems(
+    businessId: string,
+    lines: PurchaseItemDto[],
+  ): Promise<{ items: PurchaseItem[]; totalAmount: number }> {
+    let totalAmount = 0;
+    const items: PurchaseItem[] = [];
+
+    for (const item of lines) {
+      const amount = item.quantity * item.costPrice;
+      totalAmount += amount;
+
+      let validItemId: Types.ObjectId | undefined;
+      const existing =
+        item.itemId && Types.ObjectId.isValid(item.itemId)
+          ? null
+          : await this.inventoryService
+              .findByExactName(businessId, item.name)
+              .catch(() => null);
+      if (item.itemId && Types.ObjectId.isValid(item.itemId)) {
+        validItemId = new Types.ObjectId(item.itemId);
+      } else if (existing) {
+        // Typed by hand but already stocked: restock that item rather than
+        // creating a second one with the same name.
+        validItemId = new Types.ObjectId(String(existing._id));
+      } else {
+        // Automatically create in Inventory Catalog if it's a custom uncatalogued item
+        try {
+          const newItem = await this.inventoryService.create(businessId, {
+            name: item.name.trim(),
+            hsnCode: item.hsnCode?.trim().toUpperCase(),
+            unit: 'pcs',
+            salePrice: item.costPrice > 0 ? item.costPrice * 1.2 : 0,
+            costPrice: item.costPrice,
+            stockQuantity: 0,
+            minStockAlert: 5,
+            isService: false,
+          });
+          validItemId = new Types.ObjectId((newItem as any)._id);
+        } catch {
+          // If creation fails, proceed without linking itemId
+        }
+      }
+
+      items.push({
+        itemId: validItemId,
+        name: item.name,
+        hsnCode: item.hsnCode?.trim().toUpperCase(),
+        quantity: item.quantity,
+        costPrice: item.costPrice,
+        amount,
+      });
+    }
+
+    return { items, totalAmount };
+  }
+
+  // Net stock change per inventory item going from `before` lines to
+  // `after` lines. Lines with no linked item never moved stock.
+  private stockDeltas(
+    before: { itemId?: unknown; quantity: number }[],
+    after: { itemId?: unknown; quantity: number }[],
+  ): Map<string, number> {
+    const deltas = new Map<string, number>();
+    const add = (lines: typeof before, sign: 1 | -1) => {
+      for (const line of lines) {
+        if (!line.itemId) continue;
+        const key = String(line.itemId);
+        deltas.set(key, (deltas.get(key) ?? 0) + sign * line.quantity);
+      }
+    };
+    add(before, -1);
+    add(after, 1);
+    return deltas;
+  }
+
+  // Best-effort per item: one deleted from the catalogue since must not stop
+  // the purchase being saved (same rule as invoicing's restoreStock).
+  private async moveStock(
+    businessId: string,
+    deltas: Map<string, number>,
+  ): Promise<void> {
+    for (const [itemId, change] of deltas) {
+      if (!change) continue;
+      try {
+        await this.inventoryService.adjustStock(businessId, itemId, change);
+      } catch {
+        // Continue if stock adjustment fails
+      }
+    }
+  }
+
+  private async findOwned(
+    businessId: string,
+    id: string,
+  ): Promise<PurchaseDocument> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new NotFoundException('Purchase bill not found');
+    }
+    const purchase = await this.purchaseModel
+      .findOne({
+        _id: new Types.ObjectId(id),
+        businessId: idFilter(businessId),
+      })
+      .exec();
+    if (!purchase) throw new NotFoundException('Purchase bill not found');
+    return purchase;
   }
 
   /**
@@ -197,7 +383,7 @@ export class PurchasesService {
 
   async findAll(businessId: string): Promise<Purchase[]> {
     return this.purchaseModel
-      .find({ businessId: new Types.ObjectId(businessId) })
+      .find({ businessId: idFilter(businessId) })
       .sort({ purchaseDate: -1 })
       .exec();
   }
@@ -215,7 +401,7 @@ export class PurchasesService {
     amount: number,
   ): Promise<Purchase> {
     const purchase = await this.purchaseModel
-      .findOne({ _id: id, businessId: new Types.ObjectId(businessId) })
+      .findOne({ _id: id, businessId: idFilter(businessId) })
       .exec();
     if (!purchase) throw new NotFoundException('Purchase not found');
 
@@ -253,7 +439,7 @@ export class PurchasesService {
         outstanding: number;
         billCount: number;
       }>([
-        { $match: { businessId: new Types.ObjectId(businessId) } },
+        { $match: { businessId: idFilter(businessId) } },
         {
           // Rows written before balanceDue existed have no value at all;
           // treat those as settled rather than as fully owed.
@@ -293,7 +479,7 @@ export class PurchasesService {
     const purchase = await this.purchaseModel
       .findOne({
         _id: new Types.ObjectId(id),
-        businessId: new Types.ObjectId(businessId),
+        businessId: idFilter(businessId),
       })
       .exec();
     if (!purchase) {

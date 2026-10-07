@@ -15,6 +15,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import {
   CurrentBusiness,
   AuthenticatedBusiness,
+  isTechnician,
 } from '../common/decorators/current-business.decorator';
 import { RemindersService, formatMessageDate } from './reminders.service';
 import { ServicesService } from '../services/services.service';
@@ -25,6 +26,7 @@ import { InvoicingService } from '../invoicing/invoicing.service';
 import { InvoiceShareService } from '../invoicing/invoice-share.service';
 import { ServiceShareService } from '../services/service-share.service';
 import { TeamMembersService } from '../team-members/team-members.service';
+import { ShortLinksService } from '../short-links/short-links.service';
 import { formatCurrency } from '../common/pdf/document-render';
 import { messageLanguage } from '../common/utils/message-template';
 
@@ -43,6 +45,11 @@ class ReminderSentDto {
   @IsIn(['reminder', 'record'])
   kind?: 'reminder' | 'record';
 }
+
+// How long a short link lasts: the same as the signed link it points to
+// (invoice links 60 days, service records a year).
+const INVOICE_LINK_DAYS = 60;
+const RECORD_LINK_DAYS = 365;
 
 // The address this request came in on, for building a link the customer can
 // open when PUBLIC_API_URL is not configured. Honours the proxy's headers.
@@ -66,6 +73,7 @@ export class RemindersController {
     private readonly invoiceShareService: InvoiceShareService,
     private readonly serviceShareService: ServiceShareService,
     private readonly teamMembersService: TeamMembersService,
+    private readonly shortLinksService: ShortLinksService,
   ) {}
 
   // One request for the whole dashboard: the four reminder feeds, each capped
@@ -149,11 +157,15 @@ export class RemindersController {
       businessDoc.invoiceShowUpiInfo !== false;
     const invoiceUrl =
       invoice.status !== 'draft' && invoice.status !== 'cancelled'
-        ? this.invoiceShareService.url(
-            this.invoiceShareService.createToken(
-              business.businessId,
-              invoiceId,
+        ? await this.shortLinksService.shorten(
+            this.invoiceShareService.url(
+              this.invoiceShareService.createToken(
+                business.businessId,
+                invoiceId,
+              ),
+              requestBase(req),
             ),
+            INVOICE_LINK_DAYS,
             requestBase(req),
           )
         : undefined;
@@ -257,8 +269,12 @@ export class RemindersController {
           hi,
           req,
         ),
-        recordLine: `\n\n${hi ? 'आपका सर्विस रिकॉर्ड (फ़ोटो, वारंटी, अगली बुकिंग)' : 'Your service record (photos, warranty, book again)'}:\n${this.serviceShareService.url(
-          this.serviceShareService.createToken(business.businessId, serviceId),
+        recordLine: `\n\n${hi ? 'आपका सर्विस रिकॉर्ड (फ़ोटो, वारंटी, अगली बुकिंग)' : 'Your service record (photos, warranty, book again)'}:\n${await this.shortLinksService.shorten(
+          this.serviceShareService.url(
+            this.serviceShareService.createToken(business.businessId, serviceId),
+            requestBase(req),
+          ),
+          RECORD_LINK_DAYS,
           requestBase(req),
         )}`,
       },
@@ -374,9 +390,9 @@ export class RemindersController {
         );
       }
     }
-    // Invoices are the owner's; a technician cannot open one, so cannot
-    // mark one either.
-    if (dto.invoiceId && business.role === 'owner') {
+    // Invoices are the owner's and manager's; a technician cannot open one,
+    // so cannot mark one either.
+    if (dto.invoiceId && !isTechnician(business)) {
       await this.invoicingService.markReminded(
         business.businessId,
         dto.invoiceId,
@@ -406,8 +422,12 @@ export class RemindersController {
         ? `\n\nभुगतान मिल गया: ${money(invoice.total)} — धन्यवाद!`
         : `\n\nPaid: ${money(invoice.total)} — thank you!`;
     }
-    const url = this.invoiceShareService.url(
-      this.invoiceShareService.createToken(businessId, String(invoice._id)),
+    const url = await this.shortLinksService.shorten(
+      this.invoiceShareService.url(
+        this.invoiceShareService.createToken(businessId, String(invoice._id)),
+        requestBase(req),
+      ),
+      INVOICE_LINK_DAYS,
       requestBase(req),
     );
     return hi

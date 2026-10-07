@@ -8,6 +8,7 @@ import { BusinessesModule } from '../businesses/businesses.module';
 import { ServicePresetsModule } from '../service-presets/service-presets.module';
 import { InvoicingModule } from '../invoicing/invoicing.module';
 import { TeamMembersModule } from '../team-members/team-members.module';
+import { ShortLinksModule } from '../short-links/short-links.module';
 import { ExpoPushService } from '../common/push/expo-push.service';
 import {
   Business,
@@ -25,6 +26,7 @@ import {
     ServicePresetsModule,
     InvoicingModule,
     TeamMembersModule,
+    ShortLinksModule,
   ],
   controllers: [RemindersController],
   providers: [RemindersService, ExpoPushService],

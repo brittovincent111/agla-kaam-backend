@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
+import { idFilter } from '../common/utils/id-match';
 import { Model } from 'mongoose';
 // A plain `import Razorpay from 'razorpay'` is unsafe here: the project
 // doesn't have esModuleInterop enabled (turning it on elsewhere broke an
@@ -78,7 +79,7 @@ export class SubscriptionsService {
     businessId: string,
   ): Promise<SubscriptionDocument | null> {
     return this.subscriptionModel
-      .findOne({ businessId })
+      .findOne({ businessId: idFilter(businessId) })
       .sort({ createdAt: -1 })
       .exec();
   }
@@ -170,7 +171,7 @@ export class SubscriptionsService {
     // order for the same intent — reuse a still-pending one instead.
     const existing = await this.paymentOrderModel
       .findOne({
-        businessId,
+        businessId: idFilter(businessId),
         tier,
         teamEnabled: effectiveTeamEnabled,
         status: 'created',

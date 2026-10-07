@@ -27,8 +27,19 @@ const PERMISSIVE = (platform: Platform): ResolvedPolicy => ({
   latestVersion: '0.0.0',
 });
 
+// How long the version floor the request guard checks is trusted. Every app
+// request runs the guard, so reading the policy row each time put a database
+// round trip in front of all of them; a floor raised by the admin reaches
+// other server processes within this window (this one at once — see upsert).
+const POLICY_CACHE_TTL_MS = 60_000;
+
 @Injectable()
 export class AppVersionService {
+  private readonly policyCache = new Map<
+    Platform,
+    { until: number; policy: Promise<ResolvedPolicy> }
+  >();
+
   constructor(
     @InjectModel(AppVersionPolicy.name)
     private readonly model: Model<AppVersionPolicyDocument>,
@@ -52,8 +63,26 @@ export class AppVersionService {
 
   /** True when this build is below the floor and must be stopped. */
   async isBlocked(platform: Platform, version: string): Promise<boolean> {
-    const policy = await this.forPlatform(platform);
+    const policy = await this.cachedPolicy(platform);
     return isOlderThan(version, policy.minimumVersion);
+  }
+
+  // forPlatform, remembered per platform for POLICY_CACHE_TTL_MS. A failed
+  // read is not remembered.
+  private cachedPolicy(platform: Platform): Promise<ResolvedPolicy> {
+    const hit = this.policyCache.get(platform);
+    if (hit && hit.until > Date.now()) return hit.policy;
+    const policy = this.forPlatform(platform);
+    this.policyCache.set(platform, {
+      until: Date.now() + POLICY_CACHE_TTL_MS,
+      policy,
+    });
+    policy.catch(() => {
+      if (this.policyCache.get(platform)?.policy === policy) {
+        this.policyCache.delete(platform);
+      }
+    });
+    return policy;
   }
 
   async upsert(dto: UpdateAppVersionDto): Promise<ResolvedPolicy> {
@@ -81,6 +110,7 @@ export class AppVersionService {
       )
       .exec();
 
+    this.policyCache.delete(dto.platform);
     return this.forPlatform(dto.platform);
   }
 }

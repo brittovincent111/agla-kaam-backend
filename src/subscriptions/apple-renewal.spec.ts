@@ -26,8 +26,18 @@ function matches(row: Row, query: Record<string, any>): boolean {
   if (query.$or) {
     return (query.$or as Record<string, any>[]).some((q) => matches(row, q));
   }
-  return Object.entries(query).every(
-    ([k, v]) => v !== undefined && row[k] === v,
+  // `$in` as idFilter builds it: the id in both stored forms. An ObjectId
+  // only equals an ObjectId, as on a Mixed path in MongoDB.
+  const same = (a: unknown, b: unknown) =>
+    a instanceof Types.ObjectId || b instanceof Types.ObjectId
+      ? a instanceof Types.ObjectId &&
+        b instanceof Types.ObjectId &&
+        a.equals(b)
+      : a === b;
+  return Object.entries(query).every(([k, v]) =>
+    v && typeof v === 'object' && Array.isArray(v.$in)
+      ? (v.$in as unknown[]).some((c) => same(c, row[k]))
+      : v !== undefined && row[k] === v,
   );
 }
 

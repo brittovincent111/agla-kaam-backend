@@ -546,10 +546,11 @@ export class BusinessesService implements OnModuleInit {
   }
 
   async findByIdWithUsage(id: string) {
-    const business = await this.findById(id);
-    const customerCount = await this.customerModel
-      .countDocuments({ businessId: id })
-      .exec();
+    // Independent reads, so run together. A missing business still 404s.
+    const [business, customerCount] = await Promise.all([
+      this.findById(id),
+      this.customerModel.countDocuments({ businessId: idFilter(id) }).exec(),
+    ]);
     const freeTierLimit = Number(
       this.configService.get('FREE_TIER_CUSTOMER_LIMIT') ?? 25,
     );
@@ -583,7 +584,7 @@ export class BusinessesService implements OnModuleInit {
     // country at will.
     if (dto.country && dto.country !== before.country) {
       const activeSubscription = await this.subscriptionModel
-        .findOne({ businessId: id })
+        .findOne({ businessId: idFilter(id) })
         .sort({ createdAt: -1 })
         .exec();
       const isActive =

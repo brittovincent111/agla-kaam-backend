@@ -24,6 +24,7 @@ import { InvoicePdfService } from './invoice-pdf.service';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { UpdateInvoiceDto } from './dto/update-invoice.dto';
 import { RecordPaymentDto } from './dto/record-payment.dto';
+import { UpdatePaymentDto } from './dto/update-payment.dto';
 import { BusinessesService } from '../businesses/businesses.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import {
@@ -35,7 +36,9 @@ import { ListInvoicesDto } from './dto/list-invoices.dto';
 
 // Invoicing is an owner-only concern — technicians log services, not money.
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('owner')
+// Managers bill like the owner; the business-wide money total stays the
+// owner's (see outstanding-summary).
+@Roles('owner', 'manager')
 @Controller('invoices')
 export class InvoicingController {
   constructor(
@@ -63,14 +66,19 @@ export class InvoicingController {
   // normally must not return "Too Many Requests".
   @Throttle({ default: { limit: 240, ttl: 60000 } })
   @Get('page')
-  findPage(
+  async findPage(
     @CurrentBusiness() business: AuthenticatedBusiness,
     @Query() query: ListInvoicesDto,
   ) {
-    return this.invoicingService.findPageForBusiness(
+    const page = await this.invoicingService.findPageForBusiness(
       business.businessId,
       query,
     );
+    // "₹X billed · ₹Y due" over the whole list is a business money total —
+    // the owner's. A manager still sees every invoice's own amounts.
+    if (business.role === 'owner') return page;
+    const { summary: _summary, ...rest } = page;
+    return rest;
   }
 
   // The invoice billing one job, or null — the completed job's checklist.
@@ -121,6 +129,9 @@ export class InvoicingController {
     });
   }
 
+  // The business's total still owed — a business-level money total, so the
+  // owner's alone; a manager sees amounts per invoice and per customer.
+  @Roles('owner')
   @Get('outstanding-summary')
   outstandingSummary(@CurrentBusiness() business: AuthenticatedBusiness) {
     return this.invoicingService.findOutstandingSummary(business.businessId);
@@ -177,6 +188,36 @@ export class InvoicingController {
     @Body() dto: RecordPaymentDto,
   ) {
     return this.invoicingService.recordPayment(business.businessId, id, dto);
+  }
+
+  // Correcting or removing a payment recorded by mistake. Payments taken
+  // at a job's visit are refused here — they are corrected on the job.
+  @Patch(':id/payments/:paymentId')
+  updatePayment(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+    @Param('paymentId') paymentId: string,
+    @Body() dto: UpdatePaymentDto,
+  ) {
+    return this.invoicingService.updatePayment(
+      business.businessId,
+      id,
+      paymentId,
+      dto,
+    );
+  }
+
+  @Delete(':id/payments/:paymentId')
+  removePayment(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+    @Param('paymentId') paymentId: string,
+  ) {
+    return this.invoicingService.removePayment(
+      business.businessId,
+      id,
+      paymentId,
+    );
   }
 
   @Get(':id/payments')

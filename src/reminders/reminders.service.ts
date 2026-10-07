@@ -60,6 +60,16 @@ export function formatMessageDate(
 // enough not to wake anyone.
 const REMINDER_SEND_HOUR = 8;
 
+// Home's warranty alerts: running out within this many days ahead (the same
+// "expiring soon" window as the app's warranty pill)…
+export const WARRANTY_AHEAD_DAYS = 14;
+// …or run out within this many days behind.
+export const WARRANTY_BEHIND_DAYS = 30;
+
+// What Home's reminder rows read off the customer: the name on the row and
+// the number the WhatsApp reminder goes to.
+const SUMMARY_CUSTOMER_FIELDS = 'name phone';
+
 @Injectable()
 export class RemindersService {
   private readonly logger = new Logger(RemindersService.name);
@@ -139,11 +149,26 @@ export class RemindersService {
   ) {
     const days = options.days ?? 7;
     const limit = Math.min(Math.max(options.limit ?? 20, 1), 50);
-    const timezone = options.timezone ?? (await this.timezoneOf(businessId));
+    // Everything the feeds below share, fetched together: the business's
+    // timezone (every window depends on it), the AMC visit sync and a
+    // technician's scope (every feed waits on those).
+    const [timezone] = await Promise.all([
+      options.timezone ?? this.timezoneOf(businessId),
+      this.servicesService.prepareReminderReads(businessId, viewer),
+    ]);
     const startOfToday = startOfLocalDay(timezone, new Date());
     const tomorrow = addDays(startOfToday, 1);
     const soonEnd = addDays(startOfToday, days + 1);
-    const warrantyBefore = addDays(startOfToday, 14);
+    // Warranty alerts are the ones worth acting on: running out within the
+    // next WARRANTY_AHEAD_DAYS (offer an extension or an AMC while it is
+    // still live), or run out within the last WARRANTY_BEHIND_DAYS (still a
+    // warm conversation). The feed used to have no lower bound at all —
+    // every warranty that had ever expired, oldest first — so a business a
+    // few years in saw its preview filled with long-dead warranties and the
+    // ones about to lapse pushed out of sight. Expiring ones come first,
+    // soonest first; then the recently expired, most recent first.
+    const warrantyBefore = addDays(startOfToday, WARRANTY_AHEAD_DAYS);
+    const warrantySince = addDays(startOfToday, -WARRANTY_BEHIND_DAYS);
 
     // serviceDate, matching the row queries below and the Services list.
     // These counts read nextServiceDate while the rows they label were
@@ -153,7 +178,9 @@ export class RemindersService {
       overdue: { serviceDate: { $lt: startOfToday } },
       dueToday: { serviceDate: { $gte: startOfToday, $lt: tomorrow } },
       dueSoon: { serviceDate: { $gte: tomorrow, $lt: soonEnd } },
-      warrantyAlerts: { warrantyExpiry: { $ne: null, $lt: warrantyBefore } },
+      warrantyAlerts: {
+        warrantyExpiry: { $gte: warrantySince, $lt: warrantyBefore },
+      },
     };
 
     const [
@@ -166,13 +193,20 @@ export class RemindersService {
       dueSoonTotal,
       warrantyTotal,
     ] = await Promise.all([
-      this.servicesService.findOverdue(businessId, startOfToday, viewer, limit),
+      this.servicesService.findOverdue(
+        businessId,
+        startOfToday,
+        viewer,
+        limit,
+        SUMMARY_CUSTOMER_FIELDS,
+      ),
       this.servicesService.findDueBetween(
         businessId,
         startOfToday,
         tomorrow,
         viewer,
         limit,
+        SUMMARY_CUSTOMER_FIELDS,
       ),
       this.servicesService.findDueBetween(
         businessId,
@@ -180,12 +214,18 @@ export class RemindersService {
         soonEnd,
         viewer,
         limit,
+        SUMMARY_CUSTOMER_FIELDS,
       ),
-      this.servicesService.findWarrantyAlerts(
+      this.servicesService.findWarrantyFeed(
         businessId,
-        warrantyBefore,
+        {
+          today: startOfToday,
+          expiringBefore: warrantyBefore,
+          expiredSince: warrantySince,
+        },
         viewer,
         limit,
+        SUMMARY_CUSTOMER_FIELDS,
       ),
       // Pending-only for the three due feeds, so the counts match the rows.
       // Warranty alerts stay on the default (not-cancelled): a warranty
@@ -453,6 +493,7 @@ export class RemindersService {
 
       // Technicians: only what is actually assigned to them. Without the
       // per-viewer scope every technician would be told the owner's total.
+      // A manager runs the whole day, so they are told the business's count.
       const technicians =
         await this.teamMembersService.findNotifiableForBusiness(businessId);
       for (const technician of technicians) {
@@ -461,7 +502,7 @@ export class RemindersService {
           businessId,
           {
             businessId,
-            role: 'technician',
+            role: technician.role === 'manager' ? 'manager' : 'technician',
             teamMemberId: technician.id as string,
           },
           business.timezone,

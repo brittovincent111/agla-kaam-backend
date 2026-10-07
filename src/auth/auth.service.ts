@@ -1,3 +1,4 @@
+import { compareVersions } from '../common/utils/semver';
 import { loginPhoneDigits } from '../common/utils/login-phone';
 import {
   BadRequestException,
@@ -21,6 +22,7 @@ import { EmailService } from '../common/email/email.service';
 import { BusinessDocument } from '../businesses/schemas/business.schema';
 import { TeamMemberDocument } from '../team-members/schemas/team-member.schema';
 import { AppleSignInService } from '../common/apple/apple-sign-in.service';
+import { isTeamMember } from '../common/decorators/current-business.decorator';
 
 const PASSWORD_SALT_ROUNDS = 10;
 const RESET_CODE_TTL_MINUTES = 15;
@@ -29,6 +31,9 @@ const APPLE_JWKS_URL = 'https://appleid.apple.com/auth/keys';
 
 // Wrong tries allowed on an emailed code before it is thrown away.
 const MAX_CODE_ATTEMPTS = 5;
+
+// The first app version that knows the manager role (see sessionForApp).
+const MANAGER_ROLE_MIN_APP = '1.0.1';
 
 @Injectable()
 export class AuthService {
@@ -236,7 +241,7 @@ export class AuthService {
     currentPassword: string,
     newPassword: string,
   ): Promise<void> {
-    const isTech = viewer.role === 'technician' && !!viewer.teamMemberId;
+    const isTech = isTeamMember(viewer) && !!viewer.teamMemberId;
     const holder = isTech
       ? await this.teamMembersService.findByIdWithPassword(viewer.teamMemberId!)
       : await this.businessesService.findByIdWithPassword(viewer.businessId);
@@ -565,6 +570,31 @@ export class AuthService {
     return this.appleJWKS;
   }
 
+  /**
+   * App 1.0.0 treats every role except 'technician' as the owner, so a
+   * manager signing in on it would be shown the owner's settings, plans and
+   * team screens (all refused by the server). Until they update, such an app
+   * gets the technician session it always had; 1.0.1 and later get manager.
+   */
+  async sessionForApp<T extends { accessToken: string; role?: string }>(
+    session: T,
+    appVersion?: string,
+  ): Promise<T> {
+    if (session.role !== 'manager') return session;
+    if (appVersion && compareVersions(appVersion, MANAGER_ROLE_MIN_APP) >= 0) {
+      return session;
+    }
+    const payload = await this.jwtService.verifyAsync<Record<string, unknown>>(
+      session.accessToken,
+    );
+    const { iat: _iat, exp: _exp, ...claims } = payload;
+    const accessToken = await this.jwtService.signAsync({
+      ...claims,
+      role: 'technician',
+    });
+    return { ...session, accessToken, role: 'technician' };
+  }
+
   // A technician's token names the business they work for as `sub`, so every
   // downstream query scopes to that business, with role/teamMemberId marking
   // who is acting. Shared by the password and social sign-in paths.
@@ -577,13 +607,17 @@ export class AuthService {
     const business = await this.businessesService.findById(
       teamMember.businessId.toString(),
     );
+    // A manager is the same TeamMember row with role 'manager'; every other
+    // value (including rows from before roles existed) signs in as technician.
+    const role: 'technician' | 'manager' =
+      teamMember.role === 'manager' ? 'manager' : 'technician';
     const accessToken = await this.jwtService.signAsync({
       sub: business.id,
       email: teamMember.email,
-      role: 'technician',
+      role,
       teamMemberId: teamMember.id,
     });
-    return { accessToken, business, role: 'technician' as const };
+    return { accessToken, business, role };
   }
 
   // Google/Apple sign-in for a technician. Emails are globally unique across

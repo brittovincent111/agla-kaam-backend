@@ -20,6 +20,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import {
   CurrentBusiness,
   AuthenticatedBusiness,
+  isTeamMember,
 } from '../common/decorators/current-business.decorator';
 import { BusinessesService } from './businesses.service';
 import { UpdateBusinessDto } from './dto/update-business.dto';
@@ -187,7 +188,7 @@ export class BusinessesController {
     @CurrentBusiness() business: AuthenticatedBusiness,
     @Body() dto: UpdatePushTokenDto,
   ) {
-    if (business.role === 'technician' && business.teamMemberId) {
+    if (isTeamMember(business) && business.teamMemberId) {
       await this.businessesService.updateTeamMemberPushToken(
         business.teamMemberId,
         dto.pushToken,
@@ -205,7 +206,7 @@ export class BusinessesController {
   // same way as the POST above, so it only ever clears the caller's own token.
   @Delete('me/push-token')
   async clearPushToken(@CurrentBusiness() business: AuthenticatedBusiness) {
-    if (business.role === 'technician' && business.teamMemberId) {
+    if (isTeamMember(business) && business.teamMemberId) {
       await this.businessesService.clearTeamMemberPushToken(
         business.teamMemberId,
       );

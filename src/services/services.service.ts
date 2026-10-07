@@ -15,7 +15,11 @@ import { Service, ServiceDocument } from './schemas/service.schema';
 import { CreateServiceDto } from './dto/create-service.dto';
 import { CustomersService } from '../customers/customers.service';
 import { TeamMembersService } from '../team-members/team-members.service';
-import type { AuthenticatedBusiness } from '../common/decorators/current-business.decorator';
+import {
+  isTeamMember,
+  isTechnician,
+  type AuthenticatedBusiness,
+} from '../common/decorators/current-business.decorator';
 import {
   NextServiceInterval,
   WarrantyPeriod,
@@ -38,6 +42,48 @@ import { startOfLocalDay } from '../common/utils/timezone';
 
 import { AmcService } from '../amc/amc.service';
 import { S3Service } from '../common/s3/s3.service';
+
+// The compact service summary on each row of the paged customer list.
+export interface CustomerServiceSummary {
+  _id: string;
+  serviceType: string;
+  serviceDate: Date;
+  nextServiceDate: Date;
+  warrantyExpiry?: Date | null;
+  status: string;
+  completedAt?: Date;
+  booked?: boolean;
+  visitSlot?: string;
+}
+
+interface SummaryRow {
+  _id: string;
+  serviceId: unknown;
+  serviceType: string;
+  serviceDate: Date;
+  nextServiceDate: Date;
+  warrantyExpiry?: Date | null;
+  status: string;
+  completedAt?: Date | null;
+  booked?: boolean | null;
+  visitSlot?: string | null;
+}
+
+// Copies plain objects and arrays in a query filter, leaving values such as
+// ObjectIds, Dates and RegExps shared.
+function cloneFilter<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(cloneFilter) as unknown as T;
+  if (
+    value &&
+    typeof value === 'object' &&
+    Object.getPrototypeOf(value) === Object.prototype
+  ) {
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [k, cloneFilter(v)]),
+    ) as T;
+  }
+  return value;
+}
 
 @Injectable()
 export class ServicesService {
@@ -96,7 +142,7 @@ export class ServicesService {
     }
 
     let assignedTechnicianId: string | undefined;
-    if (viewer.role === 'technician') {
+    if (isTechnician(viewer)) {
       assignedTechnicianId = viewer.teamMemberId;
     } else if (dto.assignedTechnicianId) {
       await this.teamMembersService.assertActiveMember(
@@ -185,7 +231,7 @@ export class ServicesService {
     service.status = 'completed';
     service.completedAt = completedAt;
     service.completedById =
-      viewer.role === 'technician' && viewer.teamMemberId
+      isTeamMember(viewer) && viewer.teamMemberId
         ? viewer.teamMemberId
         : 'owner';
     // Warranty and the next visit run from the day the work was actually
@@ -240,7 +286,8 @@ export class ServicesService {
       service.collectionMethod = collection.method;
       service.collectionAmount = amount;
       service.collectedAt = completedAt;
-      if (viewer.role === 'technician' && viewer.teamMemberId) {
+      // A manager who takes cash at the door owes it to the owner too.
+      if (isTeamMember(viewer) && viewer.teamMemberId) {
         service.collectedById = viewer.teamMemberId;
       }
       if (collection.method !== 'cash' || !service.collectedById) {
@@ -368,13 +415,39 @@ export class ServicesService {
    * ₹8,000 for ₹800). Moves the cash-in-hand figure and the invoice payment
    * with it, so neither keeps the wrong number.
    */
+  /**
+   * The owner changing a job's warranty after it was logged — the wrong
+   * period picked at the door, or a longer one agreed later. Counted from the
+   * day the work was done (or the booked day while it is still pending), the
+   * same start completion uses.
+   */
+  async changeWarranty(
+    businessId: string,
+    serviceId: string,
+    viewer: AuthenticatedBusiness,
+    period: WarrantyPeriod,
+    customDate?: Date,
+  ): Promise<ServiceDocument> {
+    if (isTechnician(viewer)) {
+      throw new ForbiddenException('Only the owner can change a warranty.');
+    }
+    const service = await this.findOne(businessId, serviceId, viewer);
+    if (service.status === 'cancelled') {
+      throw new BadRequestException('A cancelled job has no warranty.');
+    }
+    const from = service.completedAt ?? service.serviceDate;
+    service.warrantyPeriod = period;
+    service.warrantyExpiry = resolveWarrantyExpiry(from, period, customDate);
+    return service.save();
+  }
+
   async correctCollection(
     businessId: string,
     serviceId: string,
     viewer: AuthenticatedBusiness,
     collection: { method: 'cash' | 'upi' | 'unpaid'; amount?: number },
   ): Promise<ServiceDocument> {
-    if (viewer.role === 'technician') {
+    if (isTechnician(viewer)) {
       throw new ForbiddenException(
         'Only the owner can correct a collected amount.',
       );
@@ -709,7 +782,7 @@ export class ServicesService {
     const service = await this.serviceModel
       .findOne({
         _id: serviceId,
-        businessId,
+        businessId: idFilter(businessId),
         ...(await this.technicianServiceFilter(businessId, viewer)),
       })
       .populate('assignedTechnicianId', 'name')
@@ -738,7 +811,7 @@ export class ServicesService {
     const service = await this.findOne(businessId, serviceId, viewer);
 
     if (assignedTechnicianId !== undefined) {
-      if (viewer.role !== 'owner') {
+      if (isTechnician(viewer)) {
         throw new ForbiddenException('Only the owner can reassign a service.');
       }
       if (assignedTechnicianId === null) {
@@ -824,7 +897,10 @@ export class ServicesService {
     );
 
     const query = this.serviceModel
-      .find({ businessId, customerId })
+      .find({
+        businessId: idFilter(businessId),
+        customerId: idFilter(customerId),
+      })
       .sort({ serviceDate: -1, _id: -1 })
       .populate('assignedTechnicianId', 'name');
 
@@ -842,7 +918,7 @@ export class ServicesService {
   ): Promise<ServiceDocument[]> {
     await this.amcService.syncAmcServices(businessId);
     const query: Record<string, unknown> = {
-      businessId,
+      businessId: idFilter(businessId),
       ...(await this.technicianServiceFilter(businessId, viewer)),
     };
 
@@ -928,26 +1004,36 @@ export class ServicesService {
       .filter(Boolean)
       .slice(0, 50);
 
+    // The filters that need a lookup of their own are independent of each
+    // other, so they are resolved together rather than one after another.
+    const [technicianScope, dueWindow, searchClause, pickedTechnicianFilters] =
+      await Promise.all([
+        this.technicianServiceFilter(businessId, viewer),
+        this.dueWindowFilter(businessId, options.due),
+        this.serviceSearchFilter(businessId, options.search),
+        Promise.all(
+          pickedTechnicians.map((id) =>
+            this.technicianJobsFilter(businessId, id),
+          ),
+        ),
+      ]);
+
     const filter = andFilters(
-      { businessId },
-      await this.technicianServiceFilter(businessId, viewer),
+      { businessId: idFilter(businessId) },
+      technicianScope,
       options.status && options.status !== 'all'
         ? { status: options.status }
         : // Cancelled services are history, not work — same default the
           // unpaged list applies.
           { status: { $ne: 'cancelled' } },
       pickedCustomers.length ? { customerId: idsFilter(pickedCustomers) } : {},
-      await this.dueWindowFilter(businessId, options.due),
-      await this.serviceSearchFilter(businessId, options.search),
+      dueWindow,
+      searchClause,
       pickedTechnicians.length
         ? {
-            $or: (
-              await Promise.all(
-                pickedTechnicians.map((id) =>
-                  this.technicianJobsFilter(businessId, id),
-                ),
-              )
-            ).flatMap((f) => (f.$or as Record<string, unknown>[]) ?? [f]),
+            $or: pickedTechnicianFilters.flatMap(
+              (f) => (f.$or as Record<string, unknown>[]) ?? [f],
+            ),
           }
         : {},
       pickedTypes.length
@@ -1011,17 +1097,50 @@ export class ServicesService {
     if (!due) return {};
     // The business's own day (India by default) — the same window the Home
     // reminder feeds use, never the server's UTC clock.
-    const business = await this.serviceModel.db
-      .collection('businesses')
-      .findOne({ _id: Types.ObjectId.isValid(businessId) ? new Types.ObjectId(businessId) : (businessId as any) }, { projection: { timezone: 1 } })
-      .catch(() => null);
-    const startOfToday = startOfLocalDay(business?.timezone, new Date());
+    const timezone = await this.businessTimezone(businessId);
+    const startOfToday = startOfLocalDay(timezone, new Date());
     const startOfTomorrow = new Date(startOfToday.getTime() + 86_400_000);
     if (due === 'overdue') return { serviceDate: { $lt: startOfToday } };
     if (due === 'today') {
       return { serviceDate: { $gte: startOfToday, $lt: startOfTomorrow } };
     }
     return { serviceDate: { $gte: startOfTomorrow } };
+  }
+
+  // A business's timezone barely ever changes, and the due chips ask for it
+  // on every page load — so it is remembered for a few minutes per business.
+  // Undefined (no setting, or the lookup failed) means the default zone.
+  private static readonly TIMEZONE_TTL_MS = 5 * 60_000;
+  private readonly timezoneCache = new Map<
+    string,
+    { until: number; timezone: Promise<string | undefined> }
+  >();
+
+  private businessTimezone(businessId: string): Promise<string | undefined> {
+    const hit = this.timezoneCache.get(businessId);
+    if (hit && hit.until > Date.now()) return hit.timezone;
+    if (this.timezoneCache.size > 10_000) this.timezoneCache.clear();
+    const timezone = this.serviceModel.db
+      .collection('businesses')
+      .findOne(
+        {
+          _id: Types.ObjectId.isValid(businessId)
+            ? new Types.ObjectId(businessId)
+            : (businessId as never),
+        },
+        { projection: { timezone: 1 } },
+      )
+      .then((b) => (b?.timezone as string | undefined) || undefined)
+      .catch(() => {
+        // Not remembered: try again next time.
+        this.timezoneCache.delete(businessId);
+        return undefined;
+      });
+    this.timezoneCache.set(businessId, {
+      until: Date.now() + ServicesService.TIMEZONE_TTL_MS,
+      timezone,
+    });
+    return timezone;
   }
 
   // Matches the service type, and the customer's name via a bounded id lookup
@@ -1052,12 +1171,36 @@ export class ServicesService {
   // them directly, overriding that default for just this one visit.
   // Otherwise a technician's Home screen would leak every customer's data,
   // or miss a job explicitly handed to them by the owner.
-  private async technicianServiceFilter(
+  //
+  // Worked out once per request: the viewer object is created fresh for each
+  // request by the auth guard, so it keys the memo, and the memo goes with
+  // it. /reminders/summary alone asks eight times (four feeds, four counts),
+  // each of which used to re-read every customer assigned to the technician.
+  private readonly technicianScopeMemo = new WeakMap<
+    object,
+    Map<string, Promise<Record<string, unknown>>>
+  >();
+
+  async technicianServiceFilter(
     businessId: string,
     viewer?: AuthenticatedBusiness,
   ): Promise<Record<string, unknown>> {
-    if (viewer?.role !== 'technician') return {};
-    return this.technicianJobsFilter(businessId, viewer.teamMemberId!);
+    if (!isTechnician(viewer)) return {};
+    let perViewer = this.technicianScopeMemo.get(viewer!);
+    if (!perViewer) {
+      perViewer = new Map();
+      this.technicianScopeMemo.set(viewer!, perViewer);
+    }
+    const key = `${businessId}:${viewer!.teamMemberId}`;
+    let scope = perViewer.get(key);
+    if (!scope) {
+      scope = this.technicianJobsFilter(businessId, viewer!.teamMemberId!);
+      perViewer.set(key, scope);
+      // A failed lookup is not remembered.
+      scope.catch(() => perViewer!.delete(key));
+    }
+    // A copy each time: query builders may write into the filter they get.
+    return cloneFilter(await scope);
   }
 
   // A technician's jobs: assigned to them, or unassigned jobs of customers
@@ -1085,7 +1228,7 @@ export class ServicesService {
         { assignedTechnicianId: idFilter(teamMemberId) },
         {
           assignedTechnicianId: { $exists: false },
-          customerId: { $in: customerIds },
+          customerId: idsFilter(customerIds),
         },
       ],
     };
@@ -1101,70 +1244,92 @@ export class ServicesService {
     // Both representations, for the same reason as technicianServiceFilter.
     const customerIds = await this.serviceModel
       .distinct('customerId', {
-        businessId,
+        businessId: idFilter(businessId),
         assignedTechnicianId: idFilter(teamMemberId),
       })
       .exec();
     return customerIds.map((id) => id.toString());
   }
 
-  // The soonest-due service for each of a small set of customers — the one
+  // The service each of a small set of customers is summarised by — the one
   // the customer list shows a status pill for.
   //
   // Replaces the client-side join that required downloading every service the
   // business had ever logged. Scoped to one page of customer ids, so the
   // amount of work does not grow with the size of the business.
   //
-  // "Soonest due", not "most recently logged": a customer with an overdue AC
-  // service and a comfortable RO service must surface the overdue one. This
-  // is the same rule the app applied client-side (latestRelevantService), so
-  // moving the join to the server does not change which row is chosen.
+  // The customer's next job: their earliest PENDING service, so a customer
+  // with an overdue AC service and a comfortable RO service surfaces the
+  // overdue one (the app's latestRelevantService rule). This used to sort all
+  // of a customer's services — finished ones included — oldest first and keep
+  // the first, which for anyone with history was a job done years ago, shown
+  // as hundreds of days overdue. A customer with nothing pending falls back
+  // to their most recently completed job, sent with its status so the row
+  // reads "Done" rather than "overdue"; cancelled jobs are never chosen.
+  //
+  // status, completedAt, booked and visitSlot are additions the due pill
+  // reads; the original five fields are unchanged.
   async upcomingServiceSummaries(
     businessId: string,
     customerIds: string[],
-  ): Promise<
-    Map<
-      string,
-      {
-        _id: string;
-        serviceType: string;
-        serviceDate: Date;
-        nextServiceDate: Date;
-        warrantyExpiry?: Date | null;
-      }
-    >
-  > {
-    const summaries = new Map<
-      string,
-      {
-        _id: string;
-        serviceType: string;
-        serviceDate: Date;
-        nextServiceDate: Date;
-        warrantyExpiry?: Date | null;
-      }
-    >();
+  ): Promise<Map<string, CustomerServiceSummary>> {
+    const summaries = new Map<string, CustomerServiceSummary>();
     if (!customerIds.length) return summaries;
 
-    // Sorted soonest-due-first so the first row seen for a customer is the one
-    // kept — cheaper than a $group with $first over the whole collection.
-    const rows = await this.serviceModel
-      .find({ businessId, customerId: idsFilter(customerIds) })
-      .select(
-        'customerId serviceType serviceDate nextServiceDate warrantyExpiry',
-      )
-      .sort({ serviceDate: 1 })
-      .exec();
+    const scope = {
+      businessId: idFilter(businessId),
+      customerId: idsFilter(customerIds),
+    };
+    // One row per customer, picked in the database. The customer id is
+    // grouped as a string: references are stored as either a string or an
+    // ObjectId (see id-match), and both must land on the same customer.
+    const firstPerCustomer = (sort: Record<string, 1 | -1>) => [
+      { $sort: sort },
+      {
+        $group: {
+          _id: { $toString: '$customerId' },
+          serviceId: { $first: '$_id' },
+          serviceType: { $first: '$serviceType' },
+          serviceDate: { $first: '$serviceDate' },
+          nextServiceDate: { $first: '$nextServiceDate' },
+          warrantyExpiry: { $first: '$warrantyExpiry' },
+          status: { $first: '$status' },
+          completedAt: { $first: '$completedAt' },
+          booked: { $first: '$booked' },
+          visitSlot: { $first: '$visitSlot' },
+        },
+      },
+    ];
+    const [pending, completed] = await Promise.all([
+      this.serviceModel
+        .aggregate<SummaryRow>([
+          { $match: { ...scope, status: 'pending' } },
+          ...firstPerCustomer({ serviceDate: 1, _id: 1 }),
+        ])
+        .exec(),
+      this.serviceModel
+        .aggregate<SummaryRow>([
+          { $match: { ...scope, status: 'completed' } },
+          ...firstPerCustomer({ completedAt: -1, serviceDate: -1, _id: -1 }),
+        ])
+        .exec(),
+    ]);
 
-    for (const row of rows) {
-      const key = row.customerId.toString();
+    for (const row of [...pending, ...completed]) {
+      const key = String(row._id);
       if (summaries.has(key)) continue;
       summaries.set(key, {
-        _id: (row._id as { toString(): string }).toString(),
+        _id: String(row.serviceId),
         serviceType: row.serviceType,
         serviceDate: row.serviceDate,
         nextServiceDate: row.nextServiceDate,
-        warrantyExpiry: row.warrantyExpiry,
+        warrantyExpiry: row.warrantyExpiry ?? null,
+        status: row.status,
+        ...(row.completedAt ? { completedAt: row.completedAt } : {}),
+        ...(row.booked !== undefined && row.booked !== null
+          ? { booked: row.booked }
+          : {}),
+        ...(row.visitSlot ? { visitSlot: row.visitSlot } : {}),
       });
     }
     return summaries;
@@ -1248,7 +1413,7 @@ export class ServicesService {
     from: Date,
     to: Date,
   ) {
-    if (viewer.role === 'technician') {
+    if (isTechnician(viewer)) {
       throw new ForbiddenException('Only the owner can see the team day.');
     }
     await this.amcService.syncAmcServices(businessId);
@@ -1273,7 +1438,7 @@ export class ServicesService {
           serviceDate: range,
         })
         .exec(),
-      this.teamMembersService.findAllForBusiness(businessId),
+      this.teamMembersService.findAllForBusiness(businessId, { light: true }),
     ]);
     const active = new Map(
       (
@@ -1342,7 +1507,7 @@ export class ServicesService {
     serviceIds: string[],
     technicianId: string | null,
   ): Promise<{ moved: number }> {
-    if (viewer.role === 'technician') {
+    if (isTechnician(viewer)) {
       throw new ForbiddenException('Only the owner can reassign jobs.');
     }
     if (technicianId)
@@ -1378,15 +1543,33 @@ export class ServicesService {
   private technicianBookedOnly(
     viewer?: AuthenticatedBusiness,
   ): Record<string, unknown> {
-    return viewer?.role === 'technician' ? { booked: true } : {};
+    return isTechnician(viewer) ? { booked: true } : {};
   }
 
+  /**
+   * The lookups every reminder feed of one request shares — the AMC visit
+   * sync and a technician's scope — started together up front, so the feeds
+   * that follow find them done instead of each waiting its turn.
+   */
+  async prepareReminderReads(
+    businessId: string,
+    viewer?: AuthenticatedBusiness,
+  ): Promise<void> {
+    await Promise.all([
+      this.amcService.syncAmcServices(businessId),
+      this.technicianServiceFilter(businessId, viewer),
+    ]);
+  }
+
+  // `customerFields` narrows the populated customer to what the caller
+  // shows; without it the whole customer comes back, as it always has.
   async findDueBetween(
     businessId: string,
     from: Date,
     to: Date,
     viewer?: AuthenticatedBusiness,
     limit?: number,
+    customerFields?: string,
   ): Promise<ServiceDocument[]> {
     await this.amcService.syncAmcServices(businessId);
     return this.reminderQuery(
@@ -1399,6 +1582,7 @@ export class ServicesService {
       viewer,
       limit,
       ServicesService.PENDING_ONLY,
+      customerFields,
     );
   }
 
@@ -1407,6 +1591,7 @@ export class ServicesService {
     before: Date,
     viewer?: AuthenticatedBusiness,
     limit?: number,
+    customerFields?: string,
   ): Promise<ServiceDocument[]> {
     await this.amcService.syncAmcServices(businessId);
     return this.reminderQuery(
@@ -1416,7 +1601,46 @@ export class ServicesService {
       viewer,
       limit,
       ServicesService.PENDING_ONLY,
+      customerFields,
     );
+  }
+
+  /**
+   * Home's warranty feed: warranties that run out within the window ahead
+   * (soonest first), then ones that ran out within the window behind (most
+   * recent first). See RemindersService.summary for why it is bounded.
+   */
+  async findWarrantyFeed(
+    businessId: string,
+    window: { today: Date; expiringBefore: Date; expiredSince: Date },
+    viewer?: AuthenticatedBusiness,
+    limit = 20,
+    customerFields?: string,
+  ): Promise<ServiceDocument[]> {
+    const [expiring, expired] = await Promise.all([
+      this.reminderQuery(
+        businessId,
+        {
+          warrantyExpiry: { $gte: window.today, $lt: window.expiringBefore },
+        },
+        'warrantyExpiry',
+        viewer,
+        limit,
+        ServicesService.NOT_CANCELLED,
+        customerFields,
+      ),
+      this.reminderQuery(
+        businessId,
+        { warrantyExpiry: { $gte: window.expiredSince, $lt: window.today } },
+        'warrantyExpiry',
+        viewer,
+        limit,
+        ServicesService.NOT_CANCELLED,
+        customerFields,
+        -1,
+      ),
+    ]);
+    return [...expiring, ...expired].slice(0, limit);
   }
 
   async findWarrantyAlerts(
@@ -1447,7 +1671,7 @@ export class ServicesService {
     return this.serviceModel
       .countDocuments(
         andFilters(
-          { businessId },
+          { businessId: idFilter(businessId) },
           statusFilter,
           window,
           await this.technicianServiceFilter(businessId, viewer),
@@ -1463,18 +1687,20 @@ export class ServicesService {
     viewer: AuthenticatedBusiness | undefined,
     limit?: number,
     statusFilter: Record<string, unknown> = ServicesService.NOT_CANCELLED,
+    customerFields?: string,
+    direction: 1 | -1 = 1,
   ): Promise<ServiceDocument[]> {
     const query = this.serviceModel
       .find(
         andFilters(
-          { businessId },
+          { businessId: idFilter(businessId) },
           statusFilter,
           window,
           await this.technicianServiceFilter(businessId, viewer),
         ),
       )
-      .sort({ [sortField]: 1 })
-      .populate('customerId')
+      .sort({ [sortField]: direction })
+      .populate('customerId', customerFields)
       .populate('assignedTechnicianId', 'name');
     if (limit !== undefined) query.limit(limit);
     return query.exec();
@@ -1512,7 +1738,7 @@ export class ServicesService {
     const service = await this.serviceModel
       .findOne({
         _id: serviceId,
-        businessId,
+        businessId: idFilter(businessId),
         ...(await this.technicianServiceFilter(businessId, viewer)),
       })
       .select(
@@ -1544,7 +1770,7 @@ export class ServicesService {
     const service = await this.serviceModel
       .findOne({
         _id: serviceId,
-        businessId,
+        businessId: idFilter(businessId),
         ...(await this.technicianServiceFilter(businessId, viewer)),
       })
       .select('+beforePhotoKey +afterPhotoKey')
@@ -1593,7 +1819,7 @@ export class ServicesService {
     const service = await this.serviceModel
       .findOne({
         _id: serviceId,
-        businessId,
+        businessId: idFilter(businessId),
         ...(await this.technicianServiceFilter(businessId, viewer)),
       })
       .select('+signatureKey +signatureContentType')

@@ -100,3 +100,5 @@ InvoiceSchema.index({ businessId: 1, dueDate: 1 });
 InvoiceSchema.index({ businessId: 1, invoiceDate: -1, _id: -1 });
 // The billing tab on a customer card.
 InvoiceSchema.index({ businessId: 1, customerId: 1, invoiceDate: -1 });
+// The invoice raised for a job (findLatestForService, job payments).
+InvoiceSchema.index({ businessId: 1, 'items.serviceId': 1 });

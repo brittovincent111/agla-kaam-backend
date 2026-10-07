@@ -34,7 +34,7 @@ import { ListQuotationsDto } from './dto/list-quotations.dto';
 
 // Quotations are an owner-only concern — technicians log services, not money.
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('owner')
+@Roles('owner', 'manager')
 @Controller('quotations')
 export class QuotationsController {
   constructor(
@@ -62,14 +62,18 @@ export class QuotationsController {
   // normally must not return "Too Many Requests".
   @Throttle({ default: { limit: 240, ttl: 60000 } })
   @Get('page')
-  findPage(
+  async findPage(
     @CurrentBusiness() business: AuthenticatedBusiness,
     @Query() query: ListQuotationsDto,
   ) {
-    return this.quotationsService.findPageForBusiness(
+    const page = await this.quotationsService.findPageForBusiness(
       business.businessId,
       query,
     );
+    // The list's "₹X quoted" is a business money total — the owner's.
+    if (business.role === 'owner') return page;
+    const { summary: _summary, ...rest } = page;
+    return rest;
   }
 
   @Get()

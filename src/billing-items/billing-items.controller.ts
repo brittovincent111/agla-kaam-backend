@@ -9,7 +9,8 @@ import {
 import { BillingItemsService } from './billing-items.service';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('owner')
+// Line suggestions for whoever bills: the owner or a manager.
+@Roles('owner', 'manager')
 @Controller('billing-items')
 export class BillingItemsController {
   constructor(private readonly billingItemsService: BillingItemsService) {}

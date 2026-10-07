@@ -1,6 +1,15 @@
-import { Controller, Get, NotFoundException, Param, Res } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Header,
+  NotFoundException,
+  Param,
+  Req,
+  Res,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Throttle } from '@nestjs/throttler';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import * as QRCode from 'qrcode';
 import { InvoicingService } from './invoicing.service';
 import { InvoicePdfService } from './invoice-pdf.service';
@@ -15,6 +24,7 @@ import {
 import { formatCurrency, formatDate } from '../common/pdf/document-render';
 import { buildUpiLink } from '../common/utils/upi';
 import { esc, renderPublicPage, waDigits } from '../common/public/public-page';
+import { publicApiBase, publicWebBase } from '../common/public/public-urls';
 
 // These pages are for the business's customer: no scripts, no forms, only
 // our own styles and images.
@@ -32,6 +42,7 @@ export class PublicInvoiceController {
     private readonly invoicePdfService: InvoicePdfService,
     private readonly businessesService: BusinessesService,
     private readonly subscriptionsService: SubscriptionsService,
+    private readonly configService: ConfigService,
   ) {}
 
   private async load(token: string) {
@@ -55,15 +66,9 @@ export class PublicInvoiceController {
     return { target, invoice, biz };
   }
 
-  /**
-   * The invoice as a page: what is owed, a "Pay with UPI" button that opens
-   * the customer's UPI app with the amount and invoice number filled in, and
-   * the PDF one tap away. It used to be the PDF alone, with the UPI ID to
-   * copy and the amount to type.
-   */
-  @Throttle({ default: { limit: 30, ttl: 60_000 } })
-  @Get(':token')
-  async page(@Param('token') token: string, @Res() res: Response) {
+  // What is owed and how to pay it. Shared by the HTML page and the
+  // website's JSON, so both always say the same thing.
+  private async summarise(token: string) {
     const { invoice, biz } = await this.load(token);
     const currency = invoice.currency || biz.currency || 'INR';
     const money = (n: number) => formatCurrency(n, currency);
@@ -94,9 +99,54 @@ export class PublicInvoiceController {
       : null;
 
     const bizWa = waDigits(biz.phone);
-    const paidMsg = encodeURIComponent(
-      `Hi ${biz.name}, I've paid invoice ${invoice.invoiceNumber} (${money(balance)}).`,
-    );
+    // The WhatsApp text behind "Paid? Tell …", not yet URL-encoded.
+    const paidMessage = `Hi ${biz.name}, I've paid invoice ${invoice.invoiceNumber} (${money(balance)}).`;
+    return {
+      invoice,
+      biz,
+      currency,
+      money,
+      customer,
+      balance,
+      settled,
+      status,
+      upiLink,
+      upiIsLink,
+      qr,
+      bizWa,
+      paidMessage,
+    };
+  }
+
+  /**
+   * The invoice as a page: what is owed, a "Pay with UPI" button that opens
+   * the customer's UPI app with the amount and invoice number filled in, and
+   * the PDF one tap away. It used to be the PDF alone, with the UPI ID to
+   * copy and the amount to type.
+   */
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @Get(':token')
+  async page(@Param('token') token: string, @Res() res: Response) {
+    // With the website pages in use, old long links open there too.
+    const web = publicWebBase(this.configService);
+    if (web) {
+      return res.redirect(302, `${web}/invoice/${encodeURIComponent(token)}`);
+    }
+    const {
+      invoice,
+      biz,
+      money,
+      customer,
+      balance,
+      settled,
+      status,
+      upiLink,
+      upiIsLink,
+      qr,
+      bizWa,
+      paidMessage,
+    } = await this.summarise(token);
+    const paidMsg = encodeURIComponent(paidMessage);
 
     const pill = settled
       ? '<span class="pill ok">Paid in full</span>'
@@ -157,6 +207,83 @@ ${!settled && bizWa ? `<a class="btn ghost" href="https://wa.me/${bizWa}?text=${
         body,
       }),
     );
+  }
+
+  /**
+   * The same invoice as JSON, for the website's /invoice/:token page.
+   * Field names are a contract with the website — do not rename.
+   */
+  // Called by the website's server for every customer who opens a link, so
+  // all of them share one address here. The token or 8-letter code can't be
+  // guessed, so a high limit costs nothing in safety.
+  @Throttle({ default: { limit: 600, ttl: 60_000 } })
+  @Get(':token/data')
+  @Header('Cache-Control', 'private, no-store')
+  async data(@Param('token') token: string, @Req() req: Request) {
+    const {
+      invoice,
+      biz,
+      currency,
+      customer,
+      balance,
+      settled,
+      status,
+      upiLink,
+      upiIsLink,
+      qr,
+      bizWa,
+      paidMessage,
+    } = await this.summarise(token);
+    const api = `${publicApiBase(this.configService, req)}/api/public/invoices/${encodeURIComponent(token)}`;
+    const iso = (d?: Date | null) => (d ? new Date(d).toISOString() : null);
+    return {
+      business: {
+        name: biz.name,
+        phone: biz.phone || null,
+        whatsapp: bizWa || null,
+        logoUrl: biz.hasLogo ? `${api}/logo` : null,
+      },
+      customerName: customer?.name || null,
+      invoice: {
+        number: invoice.invoiceNumber,
+        invoiceDate: iso(invoice.invoiceDate),
+        dueDate: iso(invoice.dueDate),
+        currency,
+        total: invoice.total,
+        amountPaid: invoice.amountPaid ?? 0,
+        balanceDue: Math.max(0, balance),
+        status: settled
+          ? 'paid'
+          : status === 'overdue' || status === 'partially_paid'
+            ? status
+            : 'due',
+      },
+      payment: {
+        upiLink,
+        upiIsAppLink: upiIsLink,
+        qrDataUrl: qr,
+        // Shown beside the QR only, as on the HTML page.
+        upiId: upiLink ? biz.paymentUpiId || null : null,
+      },
+      pdfUrl: `${api}/pdf`,
+      paidMessage,
+    };
+  }
+
+  // The business's logo, for the website's page. Same token, nothing else.
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @Get(':token/logo')
+  async logo(@Param('token') token: string, @Res() res: Response) {
+    const { target } = await this.load(token);
+    const logo = await this.businessesService.getLogo(target.businessId);
+    if (!logo) throw new NotFoundException();
+    res.set({
+      'Content-Type': logo.contentType,
+      'Cache-Control': 'private, max-age=86400',
+      // helmet defaults this to same-origin; the website shows these images.
+      'Cross-Origin-Resource-Policy': 'cross-origin',
+    });
+    res.send(logo.data);
   }
 
   @Throttle({ default: { limit: 30, ttl: 60_000 } })

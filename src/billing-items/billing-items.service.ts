@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
+import { idFilter } from '../common/utils/id-match';
 import { Invoice, InvoiceDocument } from '../invoicing/schemas/invoice.schema';
 import {
   Quotation,
@@ -30,14 +31,14 @@ export class BillingItemsService {
   async findRecent(businessId: string): Promise<BillingItemSuggestion[]> {
     const [invoices, quotations] = await Promise.all([
       this.invoiceModel
-        .find({ businessId })
+        .find({ businessId: idFilter(businessId) })
         .sort({ invoiceDate: -1 })
         .limit(RECENT_DOCUMENTS_PER_SOURCE)
         .select('items invoiceDate')
         .lean()
         .exec(),
       this.quotationModel
-        .find({ businessId })
+        .find({ businessId: idFilter(businessId) })
         .sort({ quotationDate: -1 })
         .limit(RECENT_DOCUMENTS_PER_SOURCE)
         .select('items quotationDate')

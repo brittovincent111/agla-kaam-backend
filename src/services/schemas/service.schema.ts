@@ -215,3 +215,18 @@ ServiceSchema.index({ businessId: 1, status: 1, serviceDate: 1, _id: 1 });
 ServiceSchema.index({ businessId: 1, customerId: 1, serviceDate: -1 });
 // Warranty expiry feed and its cron.
 ServiceSchema.index({ businessId: 1, warrantyExpiry: 1 });
+// Completed-work lists newest first: a member's finished jobs, history.
+ServiceSchema.index({ businessId: 1, status: 1, completedAt: -1 });
+// Cash a technician is holding (cashSettledAt missing) and their last
+// hand-over (newest cashSettledAt). A partial filter cannot express "field
+// missing", so the settle time is in the key — a missing field indexes as
+// null and the unsettled lookup is an equality on it. Every cash query names
+// collectionMethod: 'cash', so only cash jobs are indexed.
+ServiceSchema.index(
+  { businessId: 1, collectedById: 1, cashSettledAt: -1 },
+  { partialFilterExpression: { collectionMethod: 'cash' } },
+);
+// Home's "to book" count and the To book chip: pending, not booked, in date
+// order. booked is a range ($ne: true), so it goes after the equality on
+// status and before the serviceDate range (equality, sort, range).
+ServiceSchema.index({ businessId: 1, status: 1, booked: 1, serviceDate: 1 });

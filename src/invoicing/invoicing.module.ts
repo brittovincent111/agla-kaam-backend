@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { Invoice, InvoiceSchema } from './schemas/invoice.schema';
 import { Payment, PaymentSchema } from './schemas/payment.schema';
+import { Service, ServiceSchema } from '../services/schemas/service.schema';
 import { InvoicingService } from './invoicing.service';
 import { InvoicingController } from './invoicing.controller';
 import { InvoicePdfService } from './invoice-pdf.service';
@@ -19,6 +20,8 @@ import { InventoryModule } from '../inventory/inventory.module';
     MongooseModule.forFeature([
       { name: Invoice.name, schema: InvoiceSchema },
       { name: Payment.name, schema: PaymentSchema },
+      // Read only: whether a payment came from a job's door collection.
+      { name: Service.name, schema: ServiceSchema },
     ]),
     CustomersModule,
     ServicesModule,

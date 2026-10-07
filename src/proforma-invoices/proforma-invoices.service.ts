@@ -49,7 +49,7 @@ export class ProformaInvoicesService {
     const serial =
       business?.proformaNextSerial ||
       (await this.proformaModel.countDocuments({
-        businessId: new Types.ObjectId(businessId),
+        businessId: idFilter(businessId),
       })) + 1;
 
     const proformaNumber = `${prefix}${new Date().getFullYear()}-${String(serial).padStart(3, '0')}`;
@@ -173,7 +173,7 @@ export class ProformaInvoicesService {
 
   async findAll(businessId: string): Promise<ProformaInvoiceDocument[]> {
     return this.proformaModel
-      .find({ businessId: new Types.ObjectId(businessId) })
+      .find({ businessId: idFilter(businessId) })
       .populate('customerId')
       .sort({ createdAt: -1 })
       .exec();
@@ -186,7 +186,7 @@ export class ProformaInvoicesService {
     const doc = await this.proformaModel
       .findOne({
         _id: new Types.ObjectId(id),
-        businessId: new Types.ObjectId(businessId),
+        businessId: idFilter(businessId),
       })
       .populate('customerId')
       .exec();
@@ -240,7 +240,7 @@ export class ProformaInvoicesService {
       .findOneAndUpdate(
         {
           _id: new Types.ObjectId(id),
-          businessId: new Types.ObjectId(businessId),
+          businessId: idFilter(businessId),
         },
         {
           $set: {
@@ -275,13 +275,34 @@ export class ProformaInvoicesService {
     return updated;
   }
 
+  // Drafts only, as with invoices and quotations. Anything that has gone to
+  // the customer stays on record (cancel it instead), and a converted one is
+  // the paper trail behind a real tax invoice — deleting it used to leave
+  // that invoice pointing at nothing.
   async delete(businessId: string, id: string): Promise<void> {
+    const proforma = await this.findOne(businessId, id);
+    if (proforma.status === 'converted') {
+      throw new BadRequestException(
+        'This Proforma Invoice has been converted to a tax invoice and cannot be deleted.',
+      );
+    }
+    if (proforma.status !== 'draft') {
+      throw new BadRequestException(
+        'Only draft Proforma Invoices can be deleted. Cancel it instead.',
+      );
+    }
+    // Still a draft at the moment of deleting — a convert or send racing
+    // this call wins, and the delete is refused.
     const res = await this.proformaModel.deleteOne({
       _id: new Types.ObjectId(id),
-      businessId: new Types.ObjectId(businessId),
+      businessId: idFilter(businessId),
+      status: 'draft',
     });
-    if (res.deletedCount === 0)
-      throw new NotFoundException('Proforma Invoice not found');
+    if (res.deletedCount === 0) {
+      throw new BadRequestException(
+        'This Proforma Invoice is no longer a draft and cannot be deleted.',
+      );
+    }
   }
 
   // The app's "Save & send" has always called this route, but it did not
@@ -301,11 +322,33 @@ export class ProformaInvoicesService {
     return proforma.save();
   }
 
+  // The app's "Cancel Proforma" has always called this route, but it did not
+  // exist, so cancelling failed every time and no proforma could be
+  // cancelled. A converted one has become a tax invoice: cancel that instead.
+  async cancel(businessId: string, id: string) {
+    const proforma = await this.findOne(businessId, id);
+    if (proforma.status === 'converted') {
+      throw new BadRequestException(
+        'This Proforma Invoice is already a tax invoice. Cancel the invoice instead.',
+      );
+    }
+    if (proforma.status === 'cancelled') {
+      throw new BadRequestException('This Proforma Invoice is already cancelled');
+    }
+    proforma.status = 'cancelled';
+    return proforma.save();
+  }
+
   async convertToTaxInvoice(businessId: string, id: string): Promise<any> {
     const proforma = await this.findOne(businessId, id);
     if (proforma.status === 'converted') {
       throw new BadRequestException(
         'This Proforma Invoice has already been converted',
+      );
+    }
+    if (proforma.status === 'cancelled') {
+      throw new BadRequestException(
+        'A cancelled Proforma Invoice cannot be converted',
       );
     }
 

@@ -34,6 +34,22 @@ const PASSWORD_SALT_ROUNDS = 10;
 
 @Injectable()
 export class TeamMembersService {
+  // GET /team-members/:id/tasks: how much of each list is sent. The totals
+  // are always counted in full (stats, counts).
+  static readonly TASKS_COMPLETED_CAP = 20;
+  static readonly TASKS_PENDING_CAP = 100;
+  static readonly TASKS_CUSTOMER_CAP = 100;
+  // What a job row on the member's screen reads — the row, its due pill,
+  // photo/signature ticks, warranty and tags.
+  static readonly TASK_FIELDS =
+    'businessId customerId serviceType status serviceDate completedAt ' +
+    'booked visitSlot nextServiceDate nextServiceInterval warrantyPeriod ' +
+    'warrantyExpiry hasBeforePhoto hasAfterPhoto hasSignature ' +
+    'assignedTechnicianId amcId callbackOf underWarranty lastRemindedAt ' +
+    'notes revisitCount createdAt updatedAt';
+  static readonly TASK_CUSTOMER_FIELDS =
+    'businessId name phone address assignedTechnicianId';
+
   constructor(
     @InjectModel(TeamMember.name)
     private readonly teamMemberModel: Model<TeamMemberDocument>,
@@ -195,7 +211,27 @@ export class TeamMembersService {
       .exec();
   }
 
-  async findAllForBusiness(businessId: string): Promise<any[]> {
+  /**
+   * The team, oldest member first, each with their completed-job count.
+   *
+   * `light` skips that count — an aggregation over every job the team has
+   * ever finished — and returns only what a picker or a board needs (name,
+   * role, active, phone, specialty). The default stays the full list, which
+   * is what already-installed apps read.
+   */
+  async findAllForBusiness(
+    businessId: string,
+    options: { light?: boolean } = {},
+  ): Promise<any[]> {
+    if (options.light) {
+      return this.teamMemberModel
+        .find({ businessId: idFilter(businessId) })
+        .select('name role active phone specialty')
+        .sort({ createdAt: 1 })
+        .lean()
+        .exec();
+    }
+
     const members = await this.teamMemberModel
       .find({ businessId: idFilter(businessId) })
       .sort({ createdAt: 1 })
@@ -241,17 +277,26 @@ export class TeamMembersService {
       throw new NotFoundException('Team member not found');
     }
 
-    // Customers whose default assigned technician is this member
-    const assignedCustomers = await this.customerModel
-      .find({
-        businessId: idFilter(businessId),
-        assignedTechnicianId: idFilter(teamMemberId),
-      })
-      .sort({ name: 1 })
-      .lean()
-      .exec();
+    // Customers whose default assigned technician is this member. Every id
+    // is needed to scope the jobs below; only the first page of them is sent.
+    const customerScope = {
+      businessId: idFilter(businessId),
+      assignedTechnicianId: idFilter(teamMemberId),
+    };
+    const [assignedCustomerRows, assignedCustomers] = await Promise.all([
+      this.customerModel.find(customerScope).select('_id').lean().exec(),
+      this.customerModel
+        .find(customerScope)
+        .select(TeamMembersService.TASK_CUSTOMER_FIELDS)
+        .sort({ name: 1 })
+        .limit(TeamMembersService.TASKS_CUSTOMER_CAP)
+        .lean()
+        .exec(),
+    ]);
 
-    const assignedCustomerIds = assignedCustomers.map((c) => c._id.toString());
+    const assignedCustomerIds = assignedCustomerRows.map((c) =>
+      c._id.toString(),
+    );
 
     // Services directly assigned or through default customer assignment
     const serviceFilter: any = {
@@ -270,30 +315,48 @@ export class TeamMembersService {
       serviceFilter.assignedTechnicianId = idFilter(teamMemberId);
     }
 
-    const [pendingTasks, completedTasks] = await Promise.all([
-      this.serviceModel
-        .find({ ...serviceFilter, status: 'pending' })
-        .populate('customerId', 'name phone address')
-        .sort({ serviceDate: 1 })
-        .lean()
-        .exec(),
-      this.serviceModel
-        .find({ ...serviceFilter, status: 'completed' })
-        .populate('customerId', 'name phone address')
-        .sort({ completedAt: -1, serviceDate: -1 })
-        .lean()
-        .exec(),
-    ]);
+    // Capped lists — the newest finished jobs, the soonest open ones — with
+    // the true totals counted alongside. Both lists used to be every job the
+    // member had ever had, whole documents with their customers populated.
+    const pendingFilter = { ...serviceFilter, status: 'pending' };
+    const completedFilter = { ...serviceFilter, status: 'completed' };
+    const [pendingTasks, completedTasks, pendingCount, completedCount] =
+      await Promise.all([
+        this.serviceModel
+          .find(pendingFilter)
+          .select(TeamMembersService.TASK_FIELDS)
+          .populate('customerId', 'name phone address')
+          .sort({ serviceDate: 1, _id: 1 })
+          .limit(TeamMembersService.TASKS_PENDING_CAP)
+          .lean()
+          .exec(),
+        this.serviceModel
+          .find(completedFilter)
+          .select(TeamMembersService.TASK_FIELDS)
+          .populate('customerId', 'name phone address')
+          .sort({ completedAt: -1, serviceDate: -1 })
+          .limit(TeamMembersService.TASKS_COMPLETED_CAP)
+          .lean()
+          .exec(),
+        this.serviceModel.countDocuments(pendingFilter).exec(),
+        this.serviceModel.countDocuments(completedFilter).exec(),
+      ]);
 
     return {
       member: {
         ...member,
-        serviceCount: completedTasks.length,
+        serviceCount: completedCount,
       },
+      // True totals, not the length of the capped lists below.
       stats: {
-        completedCount: completedTasks.length,
-        pendingCount: pendingTasks.length,
-        customerCount: assignedCustomers.length,
+        completedCount,
+        pendingCount,
+        customerCount: assignedCustomerIds.length,
+      },
+      counts: {
+        pending: pendingCount,
+        completed: completedCount,
+        assignedCustomers: assignedCustomerIds.length,
       },
       pendingTasks,
       completedTasks,
@@ -311,7 +374,9 @@ export class TeamMembersService {
       this.subscriptionsService.getActiveTier(businessId),
       this.subscriptionsService.hasActiveTeamAddon(businessId),
       this.businessesService.findById(businessId).catch(() => null),
-      this.teamMemberModel.countDocuments({ businessId, active: true }).exec(),
+      this.teamMemberModel
+        .countDocuments({ businessId: idFilter(businessId), active: true })
+        .exec(),
     ]);
     const teamEnabled = tierAllowsTeam(tier) && teamAddon;
     const granted = business?.teamSeatLimit ?? null;
@@ -424,8 +489,12 @@ export class TeamMembersService {
 
   findNotifiableForBusiness(businessId: string) {
     return this.teamMemberModel
-      .find({ businessId, active: true, pushToken: { $exists: true, $ne: '' } })
-      .select('_id name pushToken')
+      .find({
+        businessId: idFilter(businessId),
+        active: true,
+        pushToken: { $exists: true, $ne: '' },
+      })
+      .select('_id name pushToken role')
       .exec();
   }
 
@@ -463,10 +532,12 @@ export class TeamMembersService {
       : null;
   }
 
+  // Returns the member, so a caller that needs more than "still active"
+  // (the auth guard reads their current role) has it without a second read.
   async assertActiveMember(
     businessId: string,
     teamMemberId: string,
-  ): Promise<void> {
+  ): Promise<TeamMemberDocument> {
     if (!Types.ObjectId.isValid(teamMemberId)) {
       throw new NotFoundException('Technician not found');
     }
@@ -478,6 +549,7 @@ export class TeamMembersService {
     ) {
       throw new NotFoundException('Technician not found');
     }
+    return member;
   }
 
   /**
@@ -506,7 +578,7 @@ export class TeamMembersService {
 
   private async holdsSeatWithin(businessId: string, teamMemberId: string, limit: number): Promise<boolean> {
     const seats = await this.teamMemberModel
-      .find({ businessId, active: true })
+      .find({ businessId: idFilter(businessId), active: true })
       .sort({ createdAt: 1, _id: 1 })
       .limit(limit)
       .select('_id')
@@ -586,7 +658,7 @@ export class TeamMembersService {
     }
 
     await this.teamMemberModel
-      .deleteOne({ _id: teamMemberId, businessId })
+      .deleteOne({ _id: teamMemberId, businessId: idFilter(businessId) })
       .exec();
 
     // Their customers and open jobs go back to the owner. Left pointing at a
@@ -691,29 +763,35 @@ export class TeamMembersService {
         jobs.reduce((sum, j) => sum + (j.collectionAmount ?? 0), 0) * 100,
       ) / 100;
 
-    // The most recent Settle stamps every job it covered with the same time.
-    const [last] = await this.serviceModel
-      .aggregate<{ _id: Date; amount: number; jobs: number }>([
-        {
-          $match: {
-            businessId: idFilter(businessId),
-            collectionMethod: 'cash',
-            collectedById: teamMemberId,
-            cashSettledAt: { $exists: true },
-            collectionAmount: { $gt: 0 },
-          },
-        },
-        {
-          $group: {
-            _id: '$cashSettledAt',
-            amount: { $sum: '$collectionAmount' },
-            jobs: { $sum: 1 },
-          },
-        },
-        { $sort: { _id: -1 } },
-        { $limit: 1 },
-      ])
+    // The most recent Settle stamps every job it covered with the same time:
+    // find that time (newest first, one row), then add up just its jobs —
+    // rather than grouping the member's whole settlement history to keep one.
+    const settled: Record<string, unknown> = {
+      businessId: idFilter(businessId),
+      collectionMethod: 'cash',
+      collectedById: teamMemberId,
+      collectionAmount: { $gt: 0 },
+    };
+    const latest = await this.serviceModel
+      .findOne({ ...settled, cashSettledAt: { $exists: true, $ne: null } })
+      .sort({ cashSettledAt: -1 })
+      .select('cashSettledAt')
+      .lean()
       .exec();
+    const [last] = latest?.cashSettledAt
+      ? await this.serviceModel
+          .aggregate<{ _id: Date; amount: number; jobs: number }>([
+            { $match: { ...settled, cashSettledAt: latest.cashSettledAt } },
+            {
+              $group: {
+                _id: '$cashSettledAt',
+                amount: { $sum: '$collectionAmount' },
+                jobs: { $sum: 1 },
+              },
+            },
+          ])
+          .exec()
+      : [];
 
     return {
       cashInHand,

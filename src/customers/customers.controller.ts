@@ -31,7 +31,7 @@ export class CustomersController {
   constructor(private readonly customersService: CustomersService) {}
 
   // Many at once: phonebook multi-select or rows pasted from a spreadsheet.
-  @Roles('owner')
+  @Roles('owner', 'manager')
   @Post('bulk')
   bulkCreate(
     @CurrentBusiness() business: AuthenticatedBusiness,
@@ -44,7 +44,7 @@ export class CustomersController {
     );
   }
 
-  @Roles('owner')
+  @Roles('owner', 'manager')
   @Post()
   create(
     @CurrentBusiness() business: AuthenticatedBusiness,
@@ -125,7 +125,7 @@ export class CustomersController {
     );
   }
 
-  @Roles('owner')
+  @Roles('owner', 'manager')
   @Patch(':id')
   update(
     @CurrentBusiness() business: AuthenticatedBusiness,

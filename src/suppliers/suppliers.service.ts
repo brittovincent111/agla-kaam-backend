@@ -9,6 +9,7 @@ import { Supplier, SupplierDocument } from './schemas/supplier.schema';
 import { CreateSupplierDto } from './dto/create-supplier.dto';
 import { UpdateSupplierDto } from './dto/update-supplier.dto';
 import { phoneMatchPatterns } from '../common/utils/phone-match';
+import { idFilter } from '../common/utils/id-match';
 import {
   DEFAULT_PAGE_SIZE,
   MAX_PAGE_SIZE,
@@ -41,7 +42,7 @@ export class SuppliersService {
     const existing = patterns.length
       ? await this.supplierModel
           .findOne({
-            businessId,
+            businessId: idFilter(businessId),
             $or: patterns.map((pattern) => ({ phone: { $regex: pattern } })),
           })
           .exec()
@@ -78,7 +79,7 @@ export class SuppliersService {
     // andFilters rather than a spread: scope, search and cursor are each a
     // top-level $or and spreading would keep only the last.
     const filter = andFilters(
-      { businessId },
+      { businessId: idFilter(businessId) },
       searchFilter(options.search),
       cursorFilter(cursor),
     );
@@ -109,9 +110,12 @@ export class SuppliersService {
     };
   }
 
+  // businessId is matched with idFilter everywhere: suppliers are stored with
+  // it as an ObjectId or a string depending on how they were created, and a
+  // plain string match let the list show a supplier that then would not open.
   async findOne(businessId: string, id: string): Promise<SupplierDocument> {
     const supplier = await this.supplierModel
-      .findOne({ _id: id, businessId })
+      .findOne({ _id: id, businessId: idFilter(businessId) })
       .exec();
     if (!supplier) throw new NotFoundException('Supplier not found');
     return supplier;
@@ -123,7 +127,7 @@ export class SuppliersService {
     dto: UpdateSupplierDto,
   ): Promise<SupplierDocument> {
     const supplier = await this.supplierModel
-      .findOneAndUpdate({ _id: id, businessId }, dto, { new: true })
+      .findOneAndUpdate({ _id: id, businessId: idFilter(businessId) }, dto, { new: true })
       .exec();
     if (!supplier) throw new NotFoundException('Supplier not found');
     return supplier;
@@ -131,7 +135,7 @@ export class SuppliersService {
 
   async remove(businessId: string, id: string): Promise<void> {
     const res = await this.supplierModel
-      .deleteOne({ _id: id, businessId })
+      .deleteOne({ _id: id, businessId: idFilter(businessId) })
       .exec();
     if (!res.deletedCount) throw new NotFoundException('Supplier not found');
   }

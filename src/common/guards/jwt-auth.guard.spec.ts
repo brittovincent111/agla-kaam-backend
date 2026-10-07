@@ -87,6 +87,27 @@ describe('JwtAuthGuard — technician access', () => {
     );
   });
 
+  it('remembers a held seat for as long as the active check', async () => {
+    const { guard, teamMembers } = setup({});
+    for (let i = 0; i < 3; i++) {
+      const request = { headers: { authorization: 'Bearer tok' } };
+      await expect(guard.canActivate(contextFor(request))).resolves.toBe(true);
+    }
+    expect(teamMembers.assertActiveMember).toHaveBeenCalledTimes(1);
+    expect(teamMembers.holdsSeat).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-checks a refused seat on the next request', async () => {
+    const { guard, teamMembers } = setup({ seat: false });
+    for (let i = 0; i < 2; i++) {
+      const request = { headers: { authorization: 'Bearer tok' } };
+      await expect(
+        guard.canActivate(contextFor(request)),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    }
+    expect(teamMembers.holdsSeat).toHaveBeenCalledTimes(2);
+  });
+
   it('still reports a bad token as 401', async () => {
     const { guard, request } = setup({});
     (guard as unknown as { jwtService: { verifyAsync: jest.Mock } })
@@ -95,5 +116,62 @@ describe('JwtAuthGuard — technician access', () => {
     await expect(guard.canActivate(contextFor(request))).rejects.toThrow(
       UnauthorizedException,
     );
+  });
+});
+
+describe('JwtAuthGuard — manager access', () => {
+  const contextFor = (request: Record<string, unknown>) =>
+    ({
+      switchToHttp: () => ({ getRequest: () => request }),
+    }) as never;
+
+  const setup = (opts: { active?: boolean; memberRole?: string }) => {
+    const teamMemberId = `tm-${++memberSeq}`;
+    const jwt = {
+      verifyAsync: jest.fn().mockResolvedValue({
+        sub: 'biz-1',
+        role: 'manager',
+        teamMemberId,
+      }),
+    };
+    const teamMembers = {
+      assertActiveMember: jest.fn(async () => {
+        if (opts.active === false) {
+          throw new NotFoundException('Technician not found');
+        }
+        return { role: opts.memberRole ?? 'manager' };
+      }),
+      holdsSeat: jest.fn().mockResolvedValue(true),
+    };
+    const guard = new JwtAuthGuard(
+      jwt as never,
+      { hasActiveTeamAddon: jest.fn() } as never,
+      teamMembers as never,
+    );
+    const request: Record<string, any> = {
+      headers: { authorization: 'Bearer tok' },
+    };
+    return { guard, request, teamMembers };
+  };
+
+  it('checks a manager is still active and holds a seat, like a technician', async () => {
+    const { guard, request, teamMembers } = setup({});
+    await expect(guard.canActivate(contextFor(request))).resolves.toBe(true);
+    expect(teamMembers.assertActiveMember).toHaveBeenCalled();
+    expect(teamMembers.holdsSeat).toHaveBeenCalled();
+    expect(request.business.role).toBe('manager');
+  });
+
+  it('refuses a removed manager', async () => {
+    const { guard, request } = setup({ active: false });
+    await expect(guard.canActivate(contextFor(request))).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+  });
+
+  it('drops a manager the owner has made a technician to technician', async () => {
+    const { guard, request } = setup({ memberRole: 'technician' });
+    await expect(guard.canActivate(contextFor(request))).resolves.toBe(true);
+    expect(request.business.role).toBe('technician');
   });
 });

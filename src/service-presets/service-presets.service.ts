@@ -9,6 +9,7 @@ import {
   ServicePreset,
   ServicePresetDocument,
 } from './schemas/service-preset.schema';
+import { idFilter } from '../common/utils/id-match';
 import { CreateServicePresetDto } from './dto/create-service-preset.dto';
 import { UpdateServicePresetDto } from './dto/update-service-preset.dto';
 import {
@@ -50,7 +51,9 @@ export class ServicePresetsService {
   // Called once, right after onboarding picks a trade type — replaces the
   // generic signup-time defaults with a trade-appropriate set.
   async reseedForTrade(businessId: string, tradeType?: string): Promise<void> {
-    await this.presetModel.deleteMany({ businessId }).exec();
+    await this.presetModel
+      .deleteMany({ businessId: idFilter(businessId) })
+      .exec();
     await this.presetModel.insertMany(
       starterRows(businessId, presetsForTrade(tradeType)),
     );
@@ -66,7 +69,7 @@ export class ServicePresetsService {
     tradeType?: string,
   ): Promise<number> {
     const existing = await this.presetModel
-      .find({ businessId })
+      .find({ businessId: idFilter(businessId) })
       .select('name previousNames')
       .exec();
     const taken = new Set(
@@ -84,7 +87,7 @@ export class ServicePresetsService {
 
   findAllForBusiness(businessId: string): Promise<ServicePresetDocument[]> {
     return this.presetModel
-      .find({ businessId })
+      .find({ businessId: idFilter(businessId) })
       .collation(CASE_INSENSITIVE)
       .sort({ name: 1 })
       .exec();
@@ -117,7 +120,7 @@ export class ServicePresetsService {
     const trimmed = name.trim();
     return this.presetModel
       .findOne({
-        businessId,
+        businessId: idFilter(businessId),
         $or: [{ name: trimmed }, { previousNames: trimmed }],
       })
       .collation(CASE_INSENSITIVE)
@@ -185,7 +188,7 @@ export class ServicePresetsService {
   ) {
     const clash = await this.presetModel
       .findOne({
-        businessId,
+        businessId: idFilter(businessId),
         name: name.trim(),
         ...(exceptId ? { _id: { $ne: new Types.ObjectId(exceptId) } } : {}),
       })

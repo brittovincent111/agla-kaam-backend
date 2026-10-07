@@ -68,6 +68,7 @@ function build() {
     { getActiveTier: jest.fn().mockResolvedValue('combo') } as any,
     businessesService as any,
     inventoryService as any,
+    {} as any,
   );
   return { service, invoiceModel, inventoryService, businessesService };
 }

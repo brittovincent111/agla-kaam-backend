@@ -54,11 +54,27 @@ describe('AMC visit accounting', () => {
     };
   }
 
-  async function build(amc: any) {
-    amcModel = {
-      find: jest
-        .fn()
-        .mockReturnValue({ exec: jest.fn().mockResolvedValue([amc]) }),
+  // A snapshot of the stored contract, as a lean read returns it.
+  function snapshot(amc: any) {
+    return {
+      ...amc,
+      visitSchedule: amc.visitSchedule.map((v: any) => ({ ...v })),
+    };
+  }
+
+  // Services the fake collection holds, by id.
+  let stored: Map<string, any>;
+
+  function makeModels(amc: any) {
+    stored = new Map();
+    const amcModelMock = {
+      find: jest.fn().mockImplementation(() => ({
+        select: jest.fn().mockReturnValue({
+          lean: jest.fn().mockReturnValue({
+            exec: jest.fn().mockImplementation(async () => [snapshot(amc)]),
+          }),
+        }),
+      })),
       findOne: jest
         .fn()
         .mockReturnValue({ exec: jest.fn().mockResolvedValue(amc) }),
@@ -68,31 +84,59 @@ describe('AMC visit accounting', () => {
       countDocuments: jest
         .fn()
         .mockReturnValue({ exec: jest.fn().mockResolvedValue(0) }),
-    };
-    serviceModel = {
-      create: jest
-        .fn()
-        .mockImplementation((doc: any) =>
-          Promise.resolve({ ...doc, _id: new Types.ObjectId() }),
-        ),
-      findOne: jest
-        .fn()
-        .mockReturnValue({ exec: jest.fn().mockResolvedValue(null) }),
-      findById: jest.fn().mockImplementation(() => ({
-        exec: jest.fn().mockResolvedValue({
-          status: 'pending',
-          serviceDate: new Date(2026, 0, 1),
-          nextServiceDate: new Date(2026, 0, 1),
-          save: jest.fn().mockResolvedValue(undefined),
+      // The claim: attach the job only while the visit is still pending and
+      // has none — the same condition Mongo applies atomically.
+      updateOne: jest.fn().mockImplementation((filter: any, update: any) => ({
+        exec: jest.fn().mockImplementation(async () => {
+          const want = filter.visitSchedule.$elemMatch;
+          const visit = amc.visitSchedule.find(
+            (v: any) =>
+              v.visitNumber === want.visitNumber &&
+              v.status === want.status &&
+              (v.serviceId === undefined || v.serviceId === null),
+          );
+          if (!visit) return { modifiedCount: 0 };
+          visit.serviceId = update.$set['visitSchedule.$.serviceId'];
+          return { modifiedCount: 1 };
         }),
       })),
     };
+    const serviceModelMock = {
+      insertMany: jest.fn().mockImplementation(async (docs: any[]) => {
+        // Yield, so two passes running together both get this far.
+        await new Promise((r) => setImmediate(r));
+        return docs.map((doc) => {
+          const created = { ...doc, _id: new Types.ObjectId() };
+          stored.set(created._id.toString(), created);
+          return created;
+        });
+      }),
+      find: jest.fn().mockImplementation(() => ({
+        select: jest.fn().mockReturnValue({
+          lean: jest.fn().mockReturnValue({
+            exec: jest.fn().mockImplementation(async () => [
+              ...stored.values(),
+            ]),
+          }),
+        }),
+      })),
+      bulkWrite: jest.fn().mockResolvedValue({}),
+      deleteMany: jest.fn().mockImplementation((filter: any) => ({
+        exec: jest.fn().mockImplementation(async () => {
+          for (const id of filter._id.$in) stored.delete(id.toString());
+          return { deletedCount: filter._id.$in.length };
+        }),
+      })),
+    };
+    return { amcModelMock, serviceModelMock };
+  }
 
+  async function serviceFor(amcModelMock: any, serviceModelMock: any) {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AmcService,
-        { provide: getModelToken(Amc.name), useValue: amcModel },
-        { provide: getModelToken(Service.name), useValue: serviceModel },
+        { provide: getModelToken(Amc.name), useValue: amcModelMock },
+        { provide: getModelToken(Service.name), useValue: serviceModelMock },
         { provide: CustomersService, useValue: { findOne: jest.fn() } },
         {
           provide: SubscriptionsService,
@@ -100,8 +144,14 @@ describe('AMC visit accounting', () => {
         },
       ],
     }).compile();
+    return module.get<AmcService>(AmcService);
+  }
 
-    service = module.get<AmcService>(AmcService);
+  async function build(amc: any) {
+    const models = makeModels(amc);
+    amcModel = models.amcModelMock;
+    serviceModel = models.serviceModelMock;
+    service = await serviceFor(amcModel, serviceModel);
     return amc;
   }
 
@@ -166,13 +216,16 @@ describe('AMC visit accounting', () => {
   });
 
   describe('syncAmcServices', () => {
+    const createdDocs = () =>
+      serviceModel.insertMany.mock.calls.flatMap((c: any[]) => c[0]);
+
     it('raises a service for the visit that is due now', async () => {
       const amc = await build(makeAmc(4));
 
       await service.syncAmcServices(BUSINESS_ID);
 
-      expect(serviceModel.create).toHaveBeenCalledTimes(1);
-      const created = serviceModel.create.mock.calls[0][0];
+      expect(createdDocs()).toHaveLength(1);
+      const created = createdDocs()[0];
       expect(created.amcId).toBe(AMC_ID);
       expect(created.status).toBe('pending');
       // Dated from the contract, so reminders follow what was actually sold.
@@ -182,6 +235,7 @@ describe('AMC visit accounting', () => {
       // visit or shows the wrong "Due …" label.
       expect(created.nextServiceDate).toEqual(amc.visitSchedule[0].dueDate);
       expect(amc.visitSchedule[0].serviceId).toBeDefined();
+      expect(serviceModel.deleteMany).not.toHaveBeenCalled();
     });
 
     it('does not raise a second service for a visit that already has one', async () => {
@@ -190,7 +244,7 @@ describe('AMC visit accounting', () => {
 
       await service.syncAmcServices(BUSINESS_ID);
 
-      expect(serviceModel.create).not.toHaveBeenCalled();
+      expect(serviceModel.insertMany).not.toHaveBeenCalled();
     });
 
     // The bug this replaces: the old guard asked "does this contract have any
@@ -202,18 +256,110 @@ describe('AMC visit accounting', () => {
 
       await service.syncAmcServices(BUSINESS_ID);
 
-      expect(serviceModel.create).toHaveBeenCalledTimes(1);
-      const created = serviceModel.create.mock.calls[0][0];
+      expect(createdDocs()).toHaveLength(1);
+      const created = createdDocs()[0];
       expect(created.serviceDate).toEqual(amc.visitSchedule[1].dueDate);
       expect(created.notes).toContain('Visit #2');
     });
 
     it('raises nothing once every visit is accounted for', async () => {
-      const amc = await build(makeAmc(2, 2));
+      await build(makeAmc(2, 2));
 
       await service.syncAmcServices(BUSINESS_ID);
 
-      expect(serviceModel.create).not.toHaveBeenCalled();
+      expect(serviceModel.insertMany).not.toHaveBeenCalled();
+    });
+
+    it('puts a drifted job back on its visit date in one write', async () => {
+      const amc = await build(makeAmc(4));
+      const jobId = new Types.ObjectId();
+      amc.visitSchedule[0].serviceId = jobId;
+      stored.set(jobId.toString(), {
+        _id: jobId,
+        status: 'pending',
+        serviceDate: new Date(2026, 5, 9),
+        nextServiceDate: new Date(2026, 5, 9),
+      });
+
+      await service.syncAmcServices(BUSINESS_ID);
+
+      expect(serviceModel.bulkWrite).toHaveBeenCalledTimes(1);
+      const [ops] = serviceModel.bulkWrite.mock.calls[0];
+      expect(ops).toHaveLength(1);
+      expect(ops[0].updateOne.update.$set.serviceDate).toEqual(
+        amc.visitSchedule[0].dueDate,
+      );
+    });
+
+    // Opening Home fires several reads at once, each of which syncs.
+    it('runs once for callers arriving together, and not again within the minute', async () => {
+      await build(makeAmc(4));
+
+      await Promise.all(
+        Array.from({ length: 6 }, () => service.syncAmcServices(BUSINESS_ID)),
+      );
+      await service.syncAmcServices(BUSINESS_ID);
+
+      expect(amcModel.find).toHaveBeenCalledTimes(1);
+      expect(createdDocs()).toHaveLength(1);
+    });
+
+    it('runs again after a contract changes, or when forced', async () => {
+      await build(makeAmc(4));
+
+      await service.syncAmcServices(BUSINESS_ID);
+      service.invalidateSync(BUSINESS_ID);
+      await service.syncAmcServices(BUSINESS_ID);
+      await service.syncAmcServices(BUSINESS_ID, { force: true });
+
+      expect(amcModel.find).toHaveBeenCalledTimes(3);
+      // Still only the one job: later passes find the visit already has it.
+      expect(createdDocs()).toHaveLength(1);
+    });
+
+    it('does not trust the last pass once a minute has gone by', async () => {
+      await build(makeAmc(4));
+      const now = jest.spyOn(Date, 'now');
+      try {
+        now.mockReturnValue(1_000_000);
+        await service.syncAmcServices(BUSINESS_ID);
+        now.mockReturnValue(1_000_000 + 61_000);
+        await service.syncAmcServices(BUSINESS_ID);
+      } finally {
+        now.mockRestore();
+      }
+      expect(amcModel.find).toHaveBeenCalledTimes(2);
+    });
+
+    // Two server processes (or two passes that both read the contract before
+    // either wrote) must not both give the same visit a job.
+    it('never leaves a visit with two jobs when two passes race', async () => {
+      const amc = await build(makeAmc(4));
+      const other = await serviceFor(amcModel, serviceModel);
+
+      await Promise.all([
+        service.syncAmcServices(BUSINESS_ID),
+        other.syncAmcServices(BUSINESS_ID),
+      ]);
+
+      // Both raised a job, only one claimed the visit, the other was removed.
+      expect(createdDocs()).toHaveLength(2);
+      expect(serviceModel.deleteMany).toHaveBeenCalledTimes(1);
+      expect(stored.size).toBe(1);
+      const [survivor] = [...stored.values()];
+      expect(amc.visitSchedule[0].serviceId).toBe(survivor._id);
+    });
+
+    it('lets a failed pass be retried straight away', async () => {
+      await build(makeAmc(4));
+      serviceModel.insertMany.mockRejectedValueOnce(new Error('db down'));
+
+      await expect(service.syncAmcServices(BUSINESS_ID)).rejects.toThrow(
+        'db down',
+      );
+      await service.syncAmcServices(BUSINESS_ID);
+
+      expect(amcModel.find).toHaveBeenCalledTimes(2);
     });
   });
 });

@@ -79,3 +79,7 @@ export class Amc {
 export const AmcSchema = SchemaFactory.createForClass(Amc);
 AmcSchema.index({ businessId: 1, contractNumber: 1 }, { unique: true });
 AmcSchema.index({ businessId: 1, customerId: 1 });
+// Active contracts per business — the visit sync and the list's counts.
+AmcSchema.index({ businessId: 1, status: 1 });
+// The contract list, newest first.
+AmcSchema.index({ businessId: 1, createdAt: -1 });

@@ -1,8 +1,17 @@
-import { Controller, Get, NotFoundException, Param, Res } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Header,
+  NotFoundException,
+  Param,
+  Req,
+  Res,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Throttle } from '@nestjs/throttler';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { ServicesService } from './services.service';
 import { ServiceShareService } from './service-share.service';
 import { Service, ServiceDocument } from './schemas/service.schema';
@@ -15,6 +24,8 @@ import { idFilter } from '../common/utils/id-match';
 import { formatDate } from '../common/pdf/document-render';
 import { esc, renderPublicPage, waDigits } from '../common/public/public-page';
 import { PUBLIC_PAGE_CSP } from '../invoicing/public-invoice.controller';
+import { publicApiBase, publicWebBase } from '../common/public/public-urls';
+import { S3Service } from '../common/s3/s3.service';
 
 /**
  * The customer's copy of a service record: what was done and when, the
@@ -38,6 +49,8 @@ export class PublicServiceController {
     // Read directly: BusinessesModule depends on this module's graph already.
     @InjectModel(Business.name)
     private readonly businessModel: Model<BusinessDocument>,
+    private readonly s3Service: S3Service,
+    private readonly configService: ConfigService,
   ) {}
 
   private async load(token: string) {
@@ -53,9 +66,9 @@ export class PublicServiceController {
     return { target, service };
   }
 
-  @Throttle({ default: { limit: 30, ttl: 60_000 } })
-  @Get(':token')
-  async page(@Param('token') token: string, @Res() res: Response) {
+  // Everything the record shows: the job, the customer, the business and
+  // their earlier visits. Shared by the HTML page and the website's JSON.
+  private async loadRecord(token: string) {
     const { target, service } = await this.load(token);
     const [customer, biz, history] = await Promise.all([
       this.customersService
@@ -63,7 +76,7 @@ export class PublicServiceController {
         .catch(() => null),
       this.businessModel
         .findById(target.businessId)
-        .select('name phone googleReviewUrl')
+        .select('name phone googleReviewUrl hasLogo')
         .lean()
         .exec(),
       this.serviceModel
@@ -81,6 +94,31 @@ export class PublicServiceController {
     ]);
     if (!biz)
       throw new NotFoundException('This service record link has expired');
+    return { target, service, customer, biz, history };
+  }
+
+  // The WhatsApp text behind "Book my next service", not yet URL-encoded.
+  private bookMessage(
+    bizName: string,
+    serviceType: string,
+    customerName?: string | null,
+  ): string {
+    const firstName = customerName?.split(' ')[0] ?? '';
+    return `Hi ${bizName}, I'd like to book my next ${serviceType}${firstName ? ` — ${customerName}` : ''}.`;
+  }
+
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @Get(':token')
+  async page(@Param('token') token: string, @Res() res: Response) {
+    // With the website pages in use, old long links open there too.
+    const web = publicWebBase(this.configService);
+    if (web) {
+      return res.redirect(
+        302,
+        `${web}/service-record/${encodeURIComponent(token)}`,
+      );
+    }
+    const { service, customer, biz, history } = await this.loadRecord(token);
 
     const done = service.status === 'completed';
     const now = Date.now();
@@ -97,7 +135,7 @@ export class PublicServiceController {
 
     const wa = waDigits(biz.phone);
     const bookText = encodeURIComponent(
-      `Hi ${biz.name}, I'd like to book my next ${service.serviceType}${firstName ? ` — ${customer!.name}` : ''}.`,
+      this.bookMessage(biz.name, service.serviceType, customer?.name),
     );
     const photo = (
       kind: 'before' | 'after',
@@ -155,6 +193,85 @@ ${done && biz.googleReviewUrl ? `<a class="btn ghost" href="${esc(biz.googleRevi
     );
   }
 
+  /**
+   * The same record as JSON, for the website's /service-record/:token page.
+   * Field names are a contract with the website — do not rename.
+   */
+  // Called by the website's server for every customer who opens a link, so
+  // all of them share one address here. The token or 8-letter code can't be
+  // guessed, so a high limit costs nothing in safety.
+  @Throttle({ default: { limit: 600, ttl: 60_000 } })
+  @Get(':token/data')
+  @Header('Cache-Control', 'private, no-store')
+  async data(@Param('token') token: string, @Req() req: Request) {
+    const { service, customer, biz, history } = await this.loadRecord(token);
+    const api = `${publicApiBase(this.configService, req)}/api/public/services/${encodeURIComponent(token)}`;
+    const done = service.status === 'completed';
+    const iso = (d?: Date | null) => (d ? new Date(d).toISOString() : null);
+    return {
+      business: {
+        name: biz.name,
+        phone: biz.phone || null,
+        whatsapp: waDigits(biz.phone) || null,
+        googleReviewUrl: biz.googleReviewUrl || null,
+        logoUrl: biz.hasLogo ? `${api}/logo` : null,
+      },
+      customerName: customer?.name || null,
+      service: {
+        serviceType: service.serviceType,
+        status: done ? 'completed' : 'scheduled',
+        date: iso(
+          done && service.completedAt
+            ? service.completedAt
+            : service.serviceDate,
+        ),
+        nextServiceDate:
+          done && service.nextServiceInterval !== 'none'
+            ? iso(service.nextServiceDate)
+            : null,
+        warrantyExpiry: iso(service.warrantyExpiry),
+        underWarranty:
+          !!service.warrantyExpiry &&
+          service.warrantyExpiry.getTime() >= Date.now(),
+        isWarrantyCallback: !!(service.underWarranty && service.callbackOf),
+        beforePhotoUrl: service.hasBeforePhoto ? `${api}/photo/before` : null,
+        afterPhotoUrl: service.hasAfterPhoto ? `${api}/photo/after` : null,
+      },
+      history: history.map((h) => ({
+        serviceType: h.serviceType,
+        date: iso((h.completedAt as Date) ?? (h.serviceDate as Date)),
+      })),
+      bookMessage: this.bookMessage(
+        biz.name,
+        service.serviceType,
+        customer?.name,
+      ),
+    };
+  }
+
+  // The business's logo, for the website's page. Same token, nothing else.
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @Get(':token/logo')
+  async logo(@Param('token') token: string, @Res() res: Response) {
+    const { target } = await this.load(token);
+    const biz = await this.businessModel
+      .findById(target.businessId)
+      .select('+logoKey +logoContentType')
+      .lean()
+      .exec();
+    const data = biz?.logoKey
+      ? await this.s3Service.download(biz.logoKey)
+      : null;
+    if (!biz || !data) throw new NotFoundException();
+    res.set({
+      'Content-Type': biz.logoContentType ?? 'image/jpeg',
+      'Cache-Control': 'private, max-age=86400',
+      // helmet defaults this to same-origin; the website shows these images.
+      'Cross-Origin-Resource-Policy': 'cross-origin',
+    });
+    res.send(data);
+  }
+
   // The job's photos, for the page above. Same token, nothing else served.
   @Throttle({ default: { limit: 60, ttl: 60_000 } })
   @Get(':token/photo/:kind')
@@ -174,6 +291,8 @@ ${done && biz.googleReviewUrl ? `<a class="btn ghost" href="${esc(biz.googleRevi
     res.set({
       'Content-Type': img.contentType,
       'Cache-Control': 'private, max-age=86400',
+      // helmet defaults this to same-origin; the website shows these images.
+      'Cross-Origin-Resource-Policy': 'cross-origin',
     });
     res.send(img.data);
   }

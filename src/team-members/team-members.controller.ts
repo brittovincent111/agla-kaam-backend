@@ -35,9 +35,27 @@ export class TeamMembersController {
     return this.teamMembersService.create(business.businessId, dto);
   }
 
+  // The one route a manager may use here: they assign and dispatch, so they
+  // need the team to pick from. Read-only — adding, editing, deactivating,
+  // passwords, seats and cash all stay the owner's. A manager is not given
+  // other members' device tokens or sign-in provider ids.
+  @Roles('owner', 'manager')
+  //
+  // ?light=1 leaves out each member's completed-job count (serviceCount) and
+  // every field a picker does not need. Without it, the full list as before.
   @Get()
-  findAll(@CurrentBusiness() business: AuthenticatedBusiness) {
-    return this.teamMembersService.findAllForBusiness(business.businessId);
+  async findAll(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Query('light') light?: string,
+  ) {
+    const members = await this.teamMembersService.findAllForBusiness(
+      business.businessId,
+      { light: light === '1' || light === 'true' },
+    );
+    if (business.role === 'owner') return members;
+    return members.map(
+      ({ pushToken: _p, googleId: _g, appleId: _a, ...rest }) => rest,
+    );
   }
 
   // Seats used and available, for "3 of 4 seats used". Before ':id' routes.

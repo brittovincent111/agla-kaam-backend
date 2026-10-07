@@ -6,6 +6,7 @@ import { BusinessesService } from '../businesses/businesses.service';
 import { CustomersService } from '../customers/customers.service';
 import { ServicesService } from '../services/services.service';
 import { Invoice } from './schemas/invoice.schema';
+import { idFilter } from '../common/utils/id-match';
 import { Payment, PaymentDocument } from './schemas/payment.schema';
 import {
   DocumentTemplateId,
@@ -175,7 +176,10 @@ export class InvoicePdfService {
     const invoiceId = (invoice as unknown as { _id?: unknown })._id;
     if (!invoiceId) return undefined;
     const payments = await this.paymentModel
-      .find({ businessId, invoiceId })
+      .find({
+        businessId: idFilter(businessId),
+        invoiceId: idFilter(String(invoiceId)),
+      })
       .sort({ paymentDate: -1 })
       .limit(1)
       .exec();

@@ -50,6 +50,16 @@ class EnvironmentVariables {
   @IsUrl({ require_tld: true, protocols: ['https'], require_protocol: true })
   PUBLIC_API_URL?: string;
 
+  // The website, e.g. https://aglakaam.app (no trailing path). When set, the
+  // service record and invoice links customers open land on the website's
+  // pages (/r/:code, /service-record/:token, /invoice/:token), which fetch
+  // their data from this API. Unset: the API's own HTML pages, as before.
+  // http and localhost are allowed so the website can be tried locally
+  // (e.g. http://localhost:3000); production uses https://aglakaam.app.
+  @IsOptional()
+  @IsUrl({ require_tld: false, protocols: ['http', 'https'], require_protocol: true })
+  PUBLIC_WEB_URL?: string;
+
   @IsString()
   @IsNotEmpty()
   RAZORPAY_KEY_ID: string;

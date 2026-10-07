@@ -73,7 +73,7 @@ export class QuotationsService {
       businessId,
       'quotationNextSerial',
       async () =>
-        (await this.quotationModel.countDocuments({ businessId }).exec()) + 1,
+        (await this.quotationModel.countDocuments({ businessId: idFilter(businessId) }).exec()) + 1,
     );
     return `${prefix}${new Date().getFullYear()}-${String(serial).padStart(3, '0')}`;
   }
@@ -128,7 +128,10 @@ export class QuotationsService {
     const tier = await this.subscriptionsService.getActiveTier(businessId);
     if (!tierHasInvoicing(tier)) {
       const count = await this.quotationModel
-        .countDocuments({ businessId, status: { $ne: 'rejected' } })
+        .countDocuments({
+          businessId: idFilter(businessId),
+          status: { $ne: 'rejected' },
+        })
         .exec();
       if (count >= FREE_TIER_QUOTATION_LIMIT) {
         throw new ForbiddenException(
@@ -247,7 +250,7 @@ export class QuotationsService {
     const sort =
       QUOTATION_SORTS[options.sort ?? 'newest'] ?? QUOTATION_SORTS.newest;
     const filter = andFilters(
-      { businessId },
+      { businessId: idFilter(businessId) },
       ...narrowing,
       pageCursorFilter(cursor, sort.field, sort.direction),
     );
@@ -315,9 +318,9 @@ export class QuotationsService {
     businessId: string,
     filters: { status?: string; search?: string; customerId?: string },
   ) {
-    const query: Record<string, unknown> = { businessId };
+    const query: Record<string, unknown> = { businessId: idFilter(businessId) };
     if (filters.customerId) {
-      query.customerId = filters.customerId;
+      query.customerId = idFilter(filters.customerId);
     }
     if (filters.status && filters.status !== 'all') {
       query.status = filters.status;

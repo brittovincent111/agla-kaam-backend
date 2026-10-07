@@ -26,6 +26,23 @@ export class InventoryService {
     private readonly inventoryItemModel: Model<InventoryItemDocument>,
   ) {}
 
+  /**
+   * The business's stock item with exactly this name, ignoring case and
+   * surrounding spaces — how a purchase line typed out by hand finds the
+   * item it is restocking instead of creating a second one.
+   */
+  async findByExactName(businessId: string, name: string): Promise<InventoryItemDocument | null> {
+    const trimmed = name.trim();
+    if (!trimmed) return null;
+    const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return this.inventoryItemModel
+      .findOne({
+        businessId: idFilter(businessId),
+        name: { $regex: `^\\s*${escaped}\\s*$`, $options: 'i' },
+      })
+      .exec();
+  }
+
   async create(
     businessId: string,
     dto: CreateInventoryItemDto,

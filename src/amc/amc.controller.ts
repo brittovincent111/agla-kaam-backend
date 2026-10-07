@@ -53,6 +53,18 @@ export class AmcController {
     return this.amcService.findPageForBusiness(business.businessId, query);
   }
 
+  // The list header's numbers (active, expiring soon, ended with a visit
+  // still pending), counted across every contract rather than the rows the
+  // app happens to have loaded. Optionally for one customer, like the list.
+  @Get('summary')
+  @Roles('owner')
+  summary(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Query('customerId') customerId?: string,
+  ) {
+    return this.amcService.summary(business.businessId, customerId);
+  }
+
   @Get()
   findAll(
     @CurrentBusiness() business: AuthenticatedBusiness,

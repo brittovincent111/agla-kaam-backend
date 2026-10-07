@@ -85,7 +85,8 @@ export class EmailService implements OnModuleInit {
       );
     }
 
-    const overrideTo = this.configService.get<string>('EMAIL_OVERRIDE_TO');
+    const isProd = this.configService.get<string>('NODE_ENV') === 'production';
+    const overrideTo = isProd ? undefined : this.configService.get<string>('EMAIL_OVERRIDE_TO');
     if (overrideTo) {
       this.logger.log(
         `[Email Config] Safety Override Active: all outgoing emails redirect to -> ${overrideTo}`,
@@ -130,7 +131,8 @@ export class EmailService implements OnModuleInit {
     text: string,
     html: string,
   ): Promise<void> {
-    const overrideTo = this.configService.get<string>('EMAIL_OVERRIDE_TO');
+    const isProd = this.configService.get<string>('NODE_ENV') === 'production';
+    const overrideTo = isProd ? undefined : this.configService.get<string>('EMAIL_OVERRIDE_TO');
     const destinationAddress = overrideTo || to;
     const emailSubject =
       overrideTo && overrideTo.toLowerCase() !== to.toLowerCase()

@@ -57,6 +57,9 @@ export class WhatsappCloudService {
     return `${root}/${version}`;
   }
   get overrideTo(): string | undefined {
+    if (this.config.get<string>('NODE_ENV') === 'production') {
+      return undefined;
+    }
     const v = this.config.get<string>('WHATSAPP_OVERRIDE_TO')?.replace(/\D/g, '');
     return v || undefined;
   }

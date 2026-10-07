@@ -36,8 +36,9 @@ import { ListProformaInvoicesDto } from './dto/list-proforma-invoices.dto';
 // Owner-only: /:id/convert turns a proforma into a real tax invoice, so
 // leaving this open let a technician issue company invoices that
 // InvoicingController explicitly forbids them from creating directly.
+// A manager bills like the owner, so converts too; a technician never does.
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('owner')
+@Roles('owner', 'manager')
 export class ProformaInvoicesController {
   constructor(
     private readonly proformaService: ProformaInvoicesService,
@@ -107,6 +108,14 @@ export class ProformaInvoicesController {
     @Param('id') id: string,
   ) {
     return this.proformaService.send(business.businessId, id);
+  }
+
+  @Patch(':id/cancel')
+  cancel(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+  ) {
+    return this.proformaService.cancel(business.businessId, id);
   }
 
   @Post(':id/convert')

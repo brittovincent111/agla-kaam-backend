@@ -21,6 +21,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import {
   CurrentBusiness,
   AuthenticatedBusiness,
+  isTeamMember,
 } from '../common/decorators/current-business.decorator';
 import { ServicesService } from './services.service';
 import { TeamMembersService } from '../team-members/team-members.service';
@@ -33,6 +34,7 @@ import {
 } from './dto/complete-service.dto';
 import { ServiceLocationDto } from './dto/service-location.dto';
 import { CallbackDto } from './dto/callback.dto';
+import { ChangeWarrantyDto } from './dto/change-warranty.dto';
 import { ReassignManyDto } from './dto/reassign-many.dto';
 
 // Ceiling on a customer's service history in one response. Well past what
@@ -127,7 +129,7 @@ export class ServicesController {
     @CurrentBusiness() business: AuthenticatedBusiness,
     @Query('month') month?: string,
   ) {
-    if (business.role !== 'technician' || !business.teamMemberId) {
+    if (!isTeamMember(business) || !business.teamMemberId) {
       return { month: month ?? '', daysWorked: 0, jobs: 0, days: [] };
     }
     return this.teamMembersService.workLog(
@@ -140,7 +142,7 @@ export class ServicesController {
   // A technician's own cash still to hand over, for their Home screen.
   @Get('my-cash')
   myCash(@CurrentBusiness() business: AuthenticatedBusiness) {
-    return business.role === 'technician' && business.teamMemberId
+    return isTeamMember(business) && business.teamMemberId
       ? this.teamMembersService.memberCash(
           business.businessId,
           business.teamMemberId,
@@ -192,6 +194,21 @@ export class ServicesController {
       dto?.collectionMethod
         ? { method: dto.collectionMethod, amount: dto.collectionAmount }
         : undefined,
+    );
+  }
+
+  @Patch(':id/warranty')
+  changeWarranty(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+    @Body() dto: ChangeWarrantyDto,
+  ) {
+    return this.servicesService.changeWarranty(
+      business.businessId,
+      id,
+      business,
+      dto.warrantyPeriod,
+      dto.customWarrantyDate,
     );
   }
 

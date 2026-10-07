@@ -7,6 +7,7 @@ import {
 } from '../common/pagination/list-options';
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -18,6 +19,7 @@ import { Payment, PaymentDocument } from './schemas/payment.schema';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { UpdateInvoiceDto } from './dto/update-invoice.dto';
 import { RecordPaymentDto } from './dto/record-payment.dto';
+import { UpdatePaymentDto } from './dto/update-payment.dto';
 import { CustomersService } from '../customers/customers.service';
 import { ServicesService } from '../services/services.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
@@ -56,6 +58,7 @@ function addDays(date: Date, days: number): Date {
 
 import { InventoryService } from '../inventory/inventory.service';
 import { InventoryItem } from '../inventory/schemas/inventory-item.schema';
+import { Service, ServiceDocument } from '../services/schemas/service.schema';
 
 @Injectable()
 export class InvoicingService {
@@ -69,6 +72,8 @@ export class InvoicingService {
     private readonly subscriptionsService: SubscriptionsService,
     private readonly businessesService: BusinessesService,
     private readonly inventoryService: InventoryService,
+    @InjectModel(Service.name)
+    private readonly serviceModel: Model<ServiceDocument>,
   ) {}
 
   private withDisplayStatus(
@@ -94,7 +99,9 @@ export class InvoicingService {
       businessId,
       'invoiceNextSerial',
       async () =>
-        (await this.invoiceModel.countDocuments({ businessId }).exec()) + 1,
+        (await this.invoiceModel
+          .countDocuments({ businessId: idFilter(businessId) })
+          .exec()) + 1,
     );
     return `${prefix}${new Date().getFullYear()}-${String(serial).padStart(3, '0')}`;
   }
@@ -149,7 +156,10 @@ export class InvoicingService {
     const tier = await this.subscriptionsService.getActiveTier(businessId);
     if (!tierHasInvoicing(tier)) {
       const count = await this.invoiceModel
-        .countDocuments({ businessId, status: { $ne: 'cancelled' } })
+        .countDocuments({
+          businessId: idFilter(businessId),
+          status: { $ne: 'cancelled' },
+        })
         .exec();
       if (count >= FREE_TIER_INVOICE_LIMIT) {
         throw new ForbiddenException(
@@ -353,9 +363,9 @@ export class InvoicingService {
     businessId: string,
     filters: { status?: string; search?: string; customerId?: string },
   ) {
-    const query: Record<string, unknown> = { businessId };
+    const query: Record<string, unknown> = { businessId: idFilter(businessId) };
     if (filters.customerId) {
-      query.customerId = filters.customerId;
+      query.customerId = idFilter(filters.customerId);
     }
     if (
       filters.status &&
@@ -447,12 +457,16 @@ export class InvoicingService {
     const sort =
       INVOICE_SORTS[options.sort ?? 'newest'] ?? INVOICE_SORTS.newest;
     const filter = andFilters(
-      { businessId },
+      { businessId: idFilter(businessId) },
       ...narrowing,
       pageCursorFilter(cursor, sort.field, sort.direction),
     );
 
-    const [rows, total] = await Promise.all([
+    // The money behind what the list shows, once per list (first page):
+    // "₹84,500 billed · ₹12,300 due". Aggregation does not cast ids, so the
+    // business is matched in both stored forms. Run alongside the page and
+    // its count rather than after them.
+    const [rows, total, summary] = await Promise.all([
       this.invoiceModel
         .find(filter)
         .sort(pageSort(sort.field, sort.direction))
@@ -462,15 +476,12 @@ export class InvoicingService {
       cursor
         ? Promise.resolve(undefined)
         : this.invoiceModel.countDocuments(filter).exec(),
+      cursor
+        ? Promise.resolve(undefined)
+        : this.moneySummary(
+            andFilters({ businessId: idFilter(businessId) }, ...narrowing),
+          ),
     ]);
-    // The money behind what the list shows, once per list (first page):
-    // "₹84,500 billed · ₹12,300 due". Aggregation does not cast ids, so the
-    // business is matched in both stored forms.
-    const summary = cursor
-      ? undefined
-      : await this.moneySummary(
-          andFilters({ businessId: idFilter(businessId) }, ...narrowing),
-        );
 
     const page = buildPage(
       rows,
@@ -519,6 +530,14 @@ export class InvoicingService {
   // has to change with it.
   private statusFilter(status?: string): Record<string, unknown> {
     if (!status || status === 'all') return {};
+    // Everything with money still owed, late or not — what Home's "Payments
+    // to collect" counts. Unpaid and Overdue each show only part of it.
+    if (status === 'to_collect') {
+      return {
+        status: { $in: ['unpaid', 'partially_paid'] },
+        balanceDue: { $gt: 0 },
+      };
+    }
     if (status === 'overdue') {
       return {
         status: { $in: ['unpaid', 'partially_paid'] },
@@ -543,26 +562,46 @@ export class InvoicingService {
     return { status };
   }
 
+  /**
+   * Home's "Payments to collect": how many invoices are still owed, the
+   * total owed, and the next three by due date.
+   *
+   * Counted and summed in the database, with only three rows fetched. It used
+   * to load every unpaid invoice — whole customer documents populated — just
+   * to add up one field and keep three of them.
+   */
   async findOutstandingSummary(businessId: string) {
-    const invoices = await this.invoiceModel
-      .find({ businessId, status: { $in: ['unpaid', 'partially_paid'] } })
-      .sort({ dueDate: 1 })
-      .populate('customerId')
-      .exec();
-
-    const withStatus = invoices.map((invoice) =>
-      this.withDisplayStatus(invoice),
-    );
-    const outstandingTotal = withStatus.reduce(
-      (sum, invoice) => sum + invoice.balanceDue,
-      0,
-    );
+    const match: Record<string, unknown> = {
+      businessId: idFilter(businessId),
+      status: { $in: ['unpaid', 'partially_paid'] },
+    };
+    const [totals, upcoming] = await Promise.all([
+      this.invoiceModel
+        .aggregate<{ count: number; outstandingTotal: number }>([
+          { $match: match },
+          {
+            $group: {
+              _id: null,
+              count: { $sum: 1 },
+              outstandingTotal: { $sum: { $ifNull: ['$balanceDue', 0] } },
+            },
+          },
+        ])
+        .exec(),
+      this.invoiceModel
+        .find(match)
+        .sort({ dueDate: 1, _id: 1 })
+        .limit(3)
+        .populate('customerId', 'name phone')
+        .exec(),
+    ]);
+    const outstandingTotal = totals[0]?.outstandingTotal ?? 0;
 
     return {
-      count: withStatus.length,
+      count: totals[0]?.count ?? 0,
       outstandingTotal:
         Math.round((outstandingTotal + Number.EPSILON) * 100) / 100,
-      upcoming: withStatus.slice(0, 3),
+      upcoming: upcoming.map((invoice) => this.withDisplayStatus(invoice)),
     };
   }
 
@@ -687,48 +726,7 @@ export class InvoicingService {
     const diff = Math.round((applied - payment.amount) * 100) / 100;
 
     if (invoice && diff !== 0) {
-      await this.invoiceModel
-        .findOneAndUpdate(
-          { _id: invoice._id },
-          [
-            {
-              $set: {
-                amountPaid: {
-                  $round: [{ $max: [0, { $add: ['$amountPaid', diff] }] }, 2],
-                },
-              },
-            },
-            {
-              $set: {
-                balanceDue: {
-                  $max: [
-                    0,
-                    { $round: [{ $subtract: ['$total', '$amountPaid'] }, 2] },
-                  ],
-                },
-              },
-            },
-            {
-              $set: {
-                status: {
-                  $cond: [
-                    { $lte: ['$balanceDue', 0] },
-                    'paid',
-                    {
-                      $cond: [
-                        { $gt: ['$amountPaid', 0] },
-                        'partially_paid',
-                        'unpaid',
-                      ],
-                    },
-                  ],
-                },
-              },
-            },
-          ],
-          { new: true, updatePipeline: true },
-        )
-        .exec();
+      await this.shiftAmountPaid(invoice._id, diff);
     }
     if (applied <= 0) {
       await payment.deleteOne();
@@ -862,7 +860,7 @@ export class InvoicingService {
     // status are derived from the amountPaid this very update produced.
     const updated = await this.invoiceModel
       .findOneAndUpdate(
-        { _id: invoiceId, businessId },
+        { _id: invoiceId, businessId: idFilter(businessId) },
         [
           {
             $set: {
@@ -908,8 +906,190 @@ export class InvoicingService {
     invoiceId: string,
   ): Promise<PaymentDocument[]> {
     return this.paymentModel
-      .find({ businessId, invoiceId })
+      .find({
+        businessId: idFilter(businessId),
+        invoiceId: idFilter(invoiceId),
+      })
       .sort({ paymentDate: -1 })
+      .exec();
+  }
+
+  /**
+   * The owner correcting a payment recorded with the wrong amount, method or
+   * date. Only the difference moves the invoice, in the same single atomic
+   * update a new payment uses, so a payment recorded at the same moment is
+   * not lost. Overpaying is allowed exactly as recordPayment allows it: the
+   * balance stops at zero.
+   */
+  async updatePayment(
+    businessId: string,
+    invoiceId: string,
+    paymentId: string,
+    dto: UpdatePaymentDto,
+  ) {
+    const { invoice, payment } = await this.findEditablePayment(
+      businessId,
+      invoiceId,
+      paymentId,
+    );
+
+    const set: Record<string, unknown> = {};
+    if (dto.amount !== undefined) {
+      set.amount = Math.round((dto.amount + Number.EPSILON) * 100) / 100;
+    }
+    if (dto.paymentMethod !== undefined) set.paymentMethod = dto.paymentMethod;
+    if (dto.paymentDate !== undefined) {
+      set.paymentDate = new Date(dto.paymentDate);
+    }
+    if (dto.reference !== undefined) set.reference = dto.reference;
+    if (dto.notes !== undefined) set.notes = dto.notes;
+
+    // Claimed on the amount it was read with: two corrections racing each
+    // other cannot both apply their difference to the invoice.
+    const updated = await this.paymentModel
+      .findOneAndUpdate(
+        { _id: payment._id, amount: payment.amount },
+        { $set: set },
+        { new: true, runValidators: true },
+      )
+      .exec();
+    if (!updated) {
+      throw new ConflictException(
+        'This payment was just changed. Reload the invoice and try again.',
+      );
+    }
+
+    const diff =
+      Math.round((updated.amount - payment.amount + Number.EPSILON) * 100) /
+      100;
+    const result =
+      diff !== 0
+        ? await this.shiftAmountPaid(invoice._id, diff)
+        : await this.invoiceModel.findById(invoice._id).exec();
+    if (!result) {
+      throw new NotFoundException('Invoice not found');
+    }
+    return { invoice: result, payment: updated };
+  }
+
+  /** Removes a payment recorded by mistake and takes it off the invoice. */
+  async removePayment(
+    businessId: string,
+    invoiceId: string,
+    paymentId: string,
+  ) {
+    const { invoice, payment } = await this.findEditablePayment(
+      businessId,
+      invoiceId,
+      paymentId,
+    );
+    // The deleted row is what is subtracted — a second delete racing this
+    // one finds nothing, so the amount cannot come off the invoice twice.
+    const removed = await this.paymentModel
+      .findOneAndDelete({ _id: payment._id })
+      .exec();
+    if (!removed) {
+      throw new NotFoundException('Payment not found');
+    }
+    const result = await this.shiftAmountPaid(invoice._id, -removed.amount);
+    if (!result) {
+      throw new NotFoundException('Invoice not found');
+    }
+    return { invoice: result };
+  }
+
+  // A payment of this business, on this invoice, that the owner may change
+  // from the invoice screen.
+  private async findEditablePayment(
+    businessId: string,
+    invoiceId: string,
+    paymentId: string,
+  ) {
+    const invoice = await this.findOne(businessId, invoiceId);
+    if (invoice.status === 'cancelled') {
+      throw new BadRequestException(
+        'Cannot change a payment on a cancelled invoice',
+      );
+    }
+    if (!Types.ObjectId.isValid(paymentId)) {
+      throw new NotFoundException('Payment not found');
+    }
+    const payment = await this.paymentModel
+      .findOne({
+        _id: paymentId,
+        businessId: idFilter(businessId),
+        invoiceId: idFilter(invoiceId),
+      })
+      .exec();
+    if (!payment) {
+      throw new NotFoundException('Payment not found');
+    }
+    // Money taken at the door belongs to the job: the job also carries the
+    // amount (and, for cash, the technician's hand-over). Changing it here
+    // would leave the job saying one thing and the invoice another — the
+    // job's own correction moves both together.
+    const fromJob = await this.serviceModel
+      .exists({
+        businessId: idFilter(businessId),
+        collectionPaymentId: payment._id.toString(),
+      })
+      .exec();
+    if (fromJob) {
+      throw new BadRequestException(
+        'Change this on the job — it was collected at the visit.',
+      );
+    }
+    return { invoice, payment };
+  }
+
+  /**
+   * Moves an invoice's amountPaid by `diff` (negative to take money off) and
+   * re-derives balanceDue and status, in one atomic update. Never below zero
+   * paid; back to 'unpaid' when nothing is paid any more. 'overdue' is not
+   * stored — it is derived at read time from the due date.
+   */
+  private shiftAmountPaid(invoiceId: Types.ObjectId, diff: number) {
+    return this.invoiceModel
+      .findOneAndUpdate(
+        { _id: invoiceId },
+        [
+          {
+            $set: {
+              amountPaid: {
+                $round: [{ $max: [0, { $add: ['$amountPaid', diff] }] }, 2],
+              },
+            },
+          },
+          {
+            $set: {
+              balanceDue: {
+                $max: [
+                  0,
+                  { $round: [{ $subtract: ['$total', '$amountPaid'] }, 2] },
+                ],
+              },
+            },
+          },
+          {
+            $set: {
+              status: {
+                $cond: [
+                  { $lte: ['$balanceDue', 0] },
+                  'paid',
+                  {
+                    $cond: [
+                      { $gt: ['$amountPaid', 0] },
+                      'partially_paid',
+                      'unpaid',
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+        ],
+        { new: true, updatePipeline: true },
+      )
       .exec();
   }
 }

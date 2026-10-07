@@ -11,6 +11,10 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { SubscriptionsService } from '../../subscriptions/subscriptions.service';
 import { TeamMembersService } from '../../team-members/team-members.service';
+import {
+  isTeamMember,
+  type BusinessRole,
+} from '../decorators/current-business.decorator';
 
 /**
  * How long a technician's "still active" result is trusted before re-checking.
@@ -22,7 +26,15 @@ import { TeamMembersService } from '../../team-members/team-members.service';
  * effect within a minute rather than a month.
  */
 const ACTIVE_TTL_MS = 60_000;
-const activeCache = new Map<string, { until: number }>();
+//
+// The seat check rides the same entry and the same TTL: a member who holds a
+// seat is not re-counted against the business's seats on every request.
+// Only a granted seat is remembered — a refusal is re-checked next time, so
+// an owner who has just bought seats is not kept waiting out the TTL.
+const activeCache = new Map<
+  string,
+  { until: number; role: BusinessRole; seat?: boolean }
+>();
 
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
@@ -57,7 +69,9 @@ export class JwtAuthGuard implements CanActivate {
         teamMemberId: payload.teamMemberId,
       };
 
-      if (payload.role === 'technician') {
+      // A manager is a team member too: removed, out of seats or demoted, they
+      // lose access exactly as a technician does.
+      if (isTeamMember(payload)) {
         // Fails closed on purpose. If this service is somehow not injectable,
         // refusing the technician is the safe outcome — skipping the check is
         // what let removed staff keep working for up to 30 days.
@@ -74,7 +88,7 @@ export class JwtAuthGuard implements CanActivate {
           pruneActiveCache();
           // Throws NotFoundException when the member is missing, belongs to
           // another business, or has been deactivated.
-          await this.teamMembersService
+          const member = await this.teamMembersService
             .assertActiveMember(payload.sub, payload.teamMemberId)
             .catch((err) => {
               if (err instanceof NotFoundException) {
@@ -82,19 +96,35 @@ export class JwtAuthGuard implements CanActivate {
               }
               throw err;
             });
-          activeCache.set(cacheKey, { until: Date.now() + ACTIVE_TTL_MS });
+          activeCache.set(cacheKey, {
+            until: Date.now() + ACTIVE_TTL_MS,
+            role: effectiveTeamRole(payload.role, member),
+          });
         }
+        // The token's role is what the member was at sign-in. A manager the
+        // owner has since made a technician drops to technician now rather
+        // than keeping manager access for the rest of a 30-day token; a
+        // promotion waits for the next sign-in, when the app learns it too.
+        request.business.role =
+          activeCache.get(cacheKey)?.role ?? request.business.role;
 
         if (this.subscriptionsService) {
           // One rule with or without Team: the technician must be inside the
           // business's seat limit — the free test seat without Team, the
           // standard or granted seats with it (earliest-added first).
-          const hasSeat = payload.teamMemberId
-            ? await this.teamMembersService.holdsSeat(
-                payload.sub,
-                payload.teamMemberId,
-              )
-            : await this.subscriptionsService.hasActiveTeamAddon(payload.sub);
+          const entry = activeCache.get(cacheKey);
+          const hasSeat =
+            entry?.seat === true
+              ? true
+              : payload.teamMemberId
+                ? await this.teamMembersService.holdsSeat(
+                    payload.sub,
+                    payload.teamMemberId,
+                  )
+                : await this.subscriptionsService.hasActiveTeamAddon(
+                    payload.sub,
+                  );
+          if (hasSeat && entry) entry.seat = true;
           if (!hasSeat) {
             throw new ForbiddenException(
               "The owner's subscription is expired or does not include active team access.",
@@ -132,6 +162,20 @@ export function memberRemoved(): ForbiddenException {
     message:
       'Your access to this business has been removed. Ask the owner if this is a mistake.',
   });
+}
+
+/**
+ * The role a team member's request runs with: never more than the token
+ * says, and never more than the member is now. Only a token issued as
+ * 'manager' to someone still a manager keeps manager access.
+ */
+function effectiveTeamRole(
+  tokenRole: string,
+  member: { role?: string } | undefined,
+): BusinessRole {
+  if (tokenRole !== 'manager') return 'technician';
+  // No row to compare (only in tests) — trust the token.
+  return !member || member.role === 'manager' ? 'manager' : 'technician';
 }
 
 /**

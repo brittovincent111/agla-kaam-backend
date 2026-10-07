@@ -38,3 +38,5 @@ export const PaymentSchema = SchemaFactory.createForClass(Payment);
 
 // The payment timeline on an invoice.
 PaymentSchema.index({ businessId: 1, invoiceId: 1, paymentDate: -1 });
+// Payments across the business by date — reports and the payments list.
+PaymentSchema.index({ businessId: 1, paymentDate: -1 });

@@ -63,6 +63,9 @@ export class SesService implements OnModuleInit {
 
   /** Testing: every email goes to this address instead (EMAIL_OVERRIDE_TO). */
   getOverrideTo(): string | null {
+    if (this.configService.get<string>('NODE_ENV') === 'production') {
+      return null;
+    }
     return this.configService.get<string>('EMAIL_OVERRIDE_TO')?.trim() || null;
   }
 

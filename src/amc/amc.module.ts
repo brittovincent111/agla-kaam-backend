@@ -4,6 +4,7 @@ import { Amc, AmcSchema } from './schemas/amc.schema';
 import { Service, ServiceSchema } from '../services/schemas/service.schema';
 import { AmcService } from './amc.service';
 import { AmcController } from './amc.controller';
+import { AmcCron } from './amc.cron';
 import { CustomersModule } from '../customers/customers.module';
 import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
 
@@ -17,7 +18,7 @@ import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
     SubscriptionsModule,
   ],
   controllers: [AmcController],
-  providers: [AmcService],
+  providers: [AmcService, AmcCron],
   exports: [AmcService],
 })
 export class AmcModule {}

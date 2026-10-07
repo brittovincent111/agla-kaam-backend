@@ -1,4 +1,6 @@
-import { Body, Controller, HttpCode, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, HttpCode, Post, UseGuards,
+  Headers,
+} from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import {
   CurrentBusiness,
@@ -47,29 +49,41 @@ export class AuthController {
 
   @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post('login-email')
-  loginEmail(@Body() dto: LoginEmailDto) {
-    return dto.phone
+  async loginEmail(
+    @Body() dto: LoginEmailDto,
+    @Headers('x-app-version') appVersion?: string,
+  ) {
+    const session = await (dto.phone
       ? this.authService.loginWithPhone(dto.phone, dto.password)
-      : this.authService.loginWithEmail(dto.email!, dto.password);
+      : this.authService.loginWithEmail(dto.email!, dto.password));
+    return this.authService.sessionForApp(session, appVersion);
   }
 
   // Less sensitive as a brute-force target (an attacker can't guess a
   // valid Google ID token), but still worth a tighter-than-default cap.
   @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Post('google')
-  google(@Body() dto: GoogleAuthDto) {
-    return this.authService.loginWithGoogle(dto.idToken);
+  async google(
+    @Body() dto: GoogleAuthDto,
+    @Headers('x-app-version') appVersion?: string,
+  ) {
+    const session = await this.authService.loginWithGoogle(dto.idToken);
+    return this.authService.sessionForApp(session, appVersion);
   }
 
   // Same rationale as google() above — not a credential-guessing surface.
   @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Post('apple')
-  apple(@Body() dto: AppleAuthDto) {
-    return this.authService.loginWithApple(
+  async apple(
+    @Body() dto: AppleAuthDto,
+    @Headers('x-app-version') appVersion?: string,
+  ) {
+    const session = await this.authService.loginWithApple(
       dto.identityToken,
       dto.fullName,
       dto.authorizationCode,
     );
+    return this.authService.sessionForApp(session, appVersion);
   }
 
   // Deliberately tighter than login — each request sends a real email, so

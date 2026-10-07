@@ -17,7 +17,10 @@ import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { tierHasUnlimitedCustomers } from '../common/constants/subscription-options';
 import { TeamMembersService } from '../team-members/team-members.service';
 import { ServicesService } from '../services/services.service';
-import type { AuthenticatedBusiness } from '../common/decorators/current-business.decorator';
+import {
+  isTechnician,
+  type AuthenticatedBusiness,
+} from '../common/decorators/current-business.decorator';
 import { phoneMatchPatterns } from '../common/utils/phone-match';
 import { idFilter } from '../common/utils/id-match';
 import {
@@ -55,7 +58,7 @@ export class CustomersService {
       ? await this.customerModel
           // Patterns are digits-only, so they are safe to interpolate.
           .findOne({
-            businessId,
+            businessId: idFilter(businessId),
             $or: patterns.map((pattern) => ({ phone: { $regex: pattern } })),
           })
           .exec()
@@ -74,7 +77,7 @@ export class CustomersService {
         this.configService.get('FREE_TIER_CUSTOMER_LIMIT') ?? 25,
       );
       const count = await this.customerModel
-        .countDocuments({ businessId })
+        .countDocuments({ businessId: idFilter(businessId) })
         .exec();
       if (count >= limit) {
         throw new ForbiddenException(
@@ -114,7 +117,7 @@ export class CustomersService {
       return pattern ? pattern.replace(/\$$/, '') : '';
     };
     const existing = await this.customerModel
-      .find({ businessId })
+      .find({ businessId: idFilter(businessId) })
       .select('phone')
       .lean()
       .exec();
@@ -186,7 +189,7 @@ export class CustomersService {
   }
 
   findAllForBusiness(businessId: string): Promise<CustomerDocument[]> {
-    return this.customerModel.find({ businessId }).sort({ name: 1 }).exec();
+    return this.customerModel.find({ businessId: idFilter(businessId) }).sort({ name: 1 }).exec();
   }
 
   // A technician sees a customer if either the customer's default is them,
@@ -203,7 +206,7 @@ export class CustomersService {
     // disagree about what a technician is allowed to see.
     const scope = await this.viewerScope(businessId, viewer);
     return this.customerModel
-      .find(andFilters({ businessId }, scope))
+      .find(andFilters({ businessId: idFilter(businessId) }, scope))
       .sort({ name: 1 })
       .exec();
   }
@@ -213,7 +216,7 @@ export class CustomersService {
     teamMemberId: string,
   ): Promise<string[]> {
     const customers = await this.customerModel
-      .find({ businessId, assignedTechnicianId: idFilter(teamMemberId) })
+      .find(andFilters({ businessId: idFilter(businessId) }, { assignedTechnicianId: idFilter(teamMemberId) }))
       .select('_id')
       .exec();
     return customers.map((c) => c.id);
@@ -251,7 +254,7 @@ export class CustomersService {
     // each a top-level `$or`, and spreading them would keep only the last.
     const scope = await this.viewerScope(businessId, viewer);
     const filter: Record<string, unknown> = andFilters(
-      { businessId },
+      { businessId: idFilter(businessId) },
       scope,
       searchFilter(options.search),
       cursorFilter(cursor),
@@ -316,7 +319,7 @@ export class CustomersService {
     const term = (search ?? '').trim();
     if (!term) return [];
     const rows = await this.customerModel
-      .find(andFilters({ businessId }, searchFilter(term)))
+      .find(andFilters({ businessId: idFilter(businessId) }, searchFilter(term)))
       .select('_id')
       .limit(cap)
       .exec();
@@ -329,7 +332,7 @@ export class CustomersService {
     businessId: string,
     viewer: AuthenticatedBusiness,
   ): Promise<Record<string, unknown>> {
-    if (viewer.role !== 'technician') return {};
+    if (!isTechnician(viewer)) return {};
     const reassignedCustomerIds =
       await this.servicesService.findAssignedServiceCustomerIds(
         businessId,
@@ -363,7 +366,7 @@ export class CustomersService {
     viewer: AuthenticatedBusiness,
   ): Promise<CustomerDocument> {
     const customer = await this.findOne(businessId, customerId);
-    if (viewer.role === 'technician') {
+    if (isTechnician(viewer)) {
       const isDefaultAssignee =
         customer.assignedTechnicianId?.toString() === viewer.teamMemberId;
       const hasReassignedService = !isDefaultAssignee
@@ -402,7 +405,7 @@ export class CustomersService {
       .updateOne(
         {
           _id: customerId,
-          businessId,
+          businessId: idFilter(businessId),
           ...(onlyIfMissing ? { defaultLocation: { $exists: false } } : {}),
         },
         { $set: { defaultLocation: location } },
@@ -464,7 +467,11 @@ export class CustomersService {
 
     if (dto.phone && dto.phone !== customer.phone) {
       const existing = await this.customerModel
-        .findOne({ businessId, phone: dto.phone, _id: { $ne: customerId } })
+        .findOne({
+          businessId: idFilter(businessId),
+          phone: dto.phone,
+          _id: { $ne: customerId },
+        })
         .exec();
       if (existing) {
         throw new ConflictException({

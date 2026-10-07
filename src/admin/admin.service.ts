@@ -29,6 +29,7 @@ import {
 } from '../app-feedback/schemas/app-feedback.schema';
 import { AdminLoginDto } from './dto/admin-login.dto';
 import { isFetchPolyfilled } from '../common/http/fetch-polyfill';
+import { idFilter } from '../common/utils/id-match';
 
 // Estimated yearly price values per tier (in INR)
 const TIER_PRICES_INR: Record<string, number> = {
@@ -311,7 +312,7 @@ export class AdminService {
 
       // The app reads the newest subscription, so edit that one (or start one).
       const current = await this.subscriptionModel
-        .findOne({ businessId: business._id })
+        .findOne({ businessId: idFilter(String(business._id)) })
         .sort({ createdAt: -1 })
         .exec();
       const fields = {
@@ -343,10 +344,10 @@ export class AdminService {
 
     const [customersCount, servicesCount, invoicesCount, subscriptionDoc] =
       await Promise.all([
-        this.customerModel.countDocuments({ businessId: business._id }),
-        this.serviceModel.countDocuments({ businessId: business._id }),
-        this.invoiceModel.countDocuments({ businessId: business._id }),
-        this.subscriptionModel.findOne({ businessId: business._id }).sort({ createdAt: -1 }).exec(),
+        this.customerModel.countDocuments({ businessId: idFilter(String(business._id)) }),
+        this.serviceModel.countDocuments({ businessId: idFilter(String(business._id)) }),
+        this.invoiceModel.countDocuments({ businessId: idFilter(String(business._id)) }),
+        this.subscriptionModel.findOne({ businessId: idFilter(String(business._id)) }).sort({ createdAt: -1 }).exec(),
       ]);
 
     return {

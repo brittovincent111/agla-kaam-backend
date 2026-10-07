@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -22,6 +23,7 @@ import {
 } from '../common/decorators/current-business.decorator';
 import { ListPurchasesDto } from './dto/list-purchases.dto';
 import { RecordPurchasePaymentDto } from './dto/record-purchase-payment.dto';
+import { UpdatePurchaseDto } from './dto/update-purchase.dto';
 import { PurchasePdfService } from './purchase-pdf.service';
 import { BusinessesService } from '../businesses/businesses.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
@@ -136,5 +138,25 @@ export class PurchasesController {
     @Param('id') id: string,
   ) {
     return this.purchasesService.findOne(business.businessId, id);
+  }
+
+  // Replaces the lines and re-derives the totals; stock moves by the
+  // difference. See PurchasesService.update.
+  @Patch(':id')
+  update(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+    @Body() dto: UpdatePurchaseDto,
+  ) {
+    return this.purchasesService.update(business.businessId, id, dto);
+  }
+
+  // Takes the purchase's stock back out of inventory before it goes.
+  @Delete(':id')
+  remove(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Param('id') id: string,
+  ) {
+    return this.purchasesService.remove(business.businessId, id);
   }
 }
