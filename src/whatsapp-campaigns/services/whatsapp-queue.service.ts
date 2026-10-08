@@ -205,6 +205,9 @@ export class WhatsappQueueService {
         bodyParams: recipient.params,
         headerImageUrl: campaign.headerImageUrl,
       });
+      this.logger.log(
+        `[WA out] campaign=${campaign._id} template=${campaign.templateName}/${campaign.languageCode} to=${recipient.phone} id=${wamid}`,
+      );
       recipient.status = 'SENT';
       recipient.waMessageId = wamid;
       recipient.sentAt = new Date();
@@ -221,6 +224,9 @@ export class WhatsappQueueService {
     } catch (err) {
       const e = err as WhatsappApiError;
       const code = e.code;
+      this.logger.warn(
+        `[WA out] FAILED campaign=${campaign._id} template=${campaign.templateName}/${campaign.languageCode} to=${recipient.phone} code=${code} ${e.message}`,
+      );
       recipient.errorCode = code;
       recipient.failureReason = e.message;
 

@@ -283,6 +283,9 @@ export class WhatsappCampaignService {
       bodyParams: params,
       headerImageUrl: c.headerImageUrl,
     });
+    this.logger.log(
+      `[WA out] test template=${c.templateName}/${c.languageCode} to=${this.cloud.overrideTo ? 'override' : digits} id=${wamid}`,
+    );
     return { sent: true, waMessageId: wamid, to: this.cloud.overrideTo ? 'override number' : digits };
   }
 

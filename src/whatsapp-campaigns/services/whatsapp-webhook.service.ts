@@ -59,7 +59,12 @@ export class WhatsappWebhookService {
 
   private async onStatus(s: any): Promise<string | null> {
     const recipient = await this.recipientModel.findOne({ waMessageId: s.id }).exec();
-    if (!recipient) return null;
+    if (!recipient) {
+      // A test send, a manual API call, or a message from the other app on
+      // this number: logged by the controller, nothing to update here.
+      this.logger.debug(`[WA status] ${s.status} for ${s.id}: not a campaign message`);
+      return null;
+    }
     const at = s.timestamp ? new Date(Number(s.timestamp) * 1000) : new Date();
     const next = String(s.status || '').toUpperCase();
     if (next === 'FAILED') {
@@ -67,7 +72,11 @@ export class WhatsappWebhookService {
       recipient.status = err?.code === 131050 ? 'OPTED_OUT' : 'FAILED';
       recipient.failedAt = at;
       recipient.errorCode = err?.code;
-      recipient.failureReason = err?.error_data?.details || err?.message || err?.title || 'Delivery failed';
+      // Title and details together: "Re-engagement message" alone does not
+      // say that the 24-hour window had closed.
+      recipient.failureReason =
+        [err?.title || err?.message, err?.error_data?.details].filter(Boolean).join(' — ').slice(0, 500) ||
+        'Delivery failed';
       if (err?.code === 131050) await this.optOut(recipient.leadId, at);
     } else if (RANK[next] && (RANK[next] > (RANK[recipient.status] ?? 0))) {
       // Webhooks can arrive out of order: never step back from read to delivered.
