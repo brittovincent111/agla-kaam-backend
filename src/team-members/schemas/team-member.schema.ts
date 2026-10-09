@@ -101,6 +101,15 @@ export class TeamMember {
   // owner's token and silently stop the owner's reminders.
   @Prop({ trim: true })
   pushToken?: string;
+
+  // This member's sign-in. One phone per member: a technician login handed
+  // to a second person would dodge paying for their seat, so signing in on
+  // another phone signs the first out.
+  @Prop({
+    type: [{ sid: String, at: Date, pushToken: String, _id: false }],
+    default: [],
+  })
+  sessions: { sid: string; at: Date; pushToken?: string }[];
 }
 
 export const TeamMemberSchema = SchemaFactory.createForClass(TeamMember);

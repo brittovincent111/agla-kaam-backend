@@ -10,6 +10,9 @@ import { WhatsappCampaignService } from './services/whatsapp-campaign.service';
 import { WhatsappWebhookService } from './services/whatsapp-webhook.service';
 import { WhatsappAdminController } from './whatsapp-admin.controller';
 import { WhatsappWebhookController } from './whatsapp-webhook.controller';
+import { WhatsappLinkController } from './whatsapp-link.controller';
+import { WhatsappBotService } from './services/whatsapp-bot.service';
+import { EmailService } from '../common/email/email.service';
 
 @Module({
   imports: [
@@ -20,8 +23,15 @@ import { WhatsappWebhookController } from './whatsapp-webhook.controller';
       { name: Lead.name, schema: LeadSchema },
     ]),
   ],
-  controllers: [WhatsappAdminController, WhatsappWebhookController],
-  providers: [WhatsappCloudService, WhatsappQueueService, WhatsappCampaignService, WhatsappWebhookService],
+  controllers: [WhatsappAdminController, WhatsappWebhookController, WhatsappLinkController],
+  providers: [
+    WhatsappCloudService,
+    WhatsappQueueService,
+    WhatsappCampaignService,
+    WhatsappWebhookService,
+    WhatsappBotService,
+    EmailService,
+  ],
   exports: [WhatsappCloudService, WhatsappCampaignService, WhatsappQueueService],
 })
 export class WhatsappCampaignsModule {}

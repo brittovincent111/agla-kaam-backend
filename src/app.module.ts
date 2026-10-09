@@ -34,6 +34,8 @@ import { EmailCampaignsModule } from './email-campaigns/email-campaigns.module';
 import { WhatsappCampaignsModule } from './whatsapp-campaigns/whatsapp-campaigns.module';
 import { AutopilotModule } from './outreach-autopilot/autopilot.module';
 import { ReportsModule } from './reports/reports.module';
+import { HelpVideosModule } from './help-videos/help-videos.module';
+import { QuickNotesModule } from './quick-notes/quick-notes.module';
 import { validate } from './env.validation';
 
 @Module({
@@ -92,6 +94,8 @@ import { validate } from './env.validation';
     WhatsappCampaignsModule,
     AutopilotModule,
     ReportsModule,
+    HelpVideosModule,
+    QuickNotesModule,
   ],
   controllers: [HealthController],
   providers: [

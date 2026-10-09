@@ -226,9 +226,18 @@ describe('BusinessesService — push tokens', () => {
       { pushToken: TOKEN },
       { $unset: { pushToken: '' } },
     );
-    expect(model('Business').findByIdAndUpdate).toHaveBeenCalledWith(BIZ, {
-      pushToken: TOKEN,
-    });
+    expect(model('Business').updateMany).toHaveBeenCalledWith(
+      { pushTokens: TOKEN, _id: { $ne: BIZ } },
+      { $pull: { pushTokens: TOKEN } },
+    );
+    // Kept as the latest phone and added to the owner's list of phones.
+    expect(model('Business').updateOne).toHaveBeenCalledWith(
+      { _id: BIZ },
+      {
+        $set: { pushToken: TOKEN },
+        $push: { pushTokens: { $each: [TOKEN], $slice: -5 } },
+      },
+    );
   });
 
   it("takes a technician's newly registered token off the owner and other members", async () => {
@@ -245,14 +254,28 @@ describe('BusinessesService — push tokens', () => {
     );
   });
 
-  it('clears only the caller’s own token on logout', async () => {
+  it('clears only the phone signing out, leaving the owner’s other phones', async () => {
+    const { service, model } = await build();
+    await service.clearPushToken(BIZ, TOKEN);
+
+    expect(model('Business').updateOne).toHaveBeenCalledWith(
+      { _id: BIZ },
+      { $pull: { pushTokens: TOKEN } },
+    );
+    expect(model('Business').updateOne).toHaveBeenCalledWith(
+      { _id: BIZ, pushToken: TOKEN },
+      { $unset: { pushToken: '' } },
+    );
+  });
+
+  it('clears every owner phone when an older app signs out without saying which', async () => {
     const { service, model } = await build();
     await service.clearPushToken(BIZ);
     await service.clearTeamMemberPushToken('tm-1');
 
     expect(model('Business').updateOne).toHaveBeenCalledWith(
       { _id: BIZ },
-      { $unset: { pushToken: '' } },
+      { $unset: { pushToken: '' }, $set: { pushTokens: [] } },
     );
     expect(model('TeamMember').updateOne).toHaveBeenCalledWith(
       { _id: 'tm-1' },

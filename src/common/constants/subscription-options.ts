@@ -1,7 +1,9 @@
 export const SUBSCRIPTION_TIERS = ['reminders', 'invoicing', 'combo'] as const;
 export type SubscriptionTier = (typeof SUBSCRIPTION_TIERS)[number];
 
-// Combo + Team: the free test seat plus 3 more.
+// Combo + Team: 4 seats in all — the owner's and 3 for technicians or
+// managers. Seats granted to a business (Business.teamSeatLimit) count the
+// same way, owner included.
 export const TEAM_SEAT_LIMIT = 4;
 
 // Lifetime caps (not per-year, never reset) for a business without an active
@@ -24,8 +26,8 @@ export function tierHasInvoicing(tier: SubscriptionTier | null): boolean {
 
 // The Team add-on is only sold bundled with Combo — a technician needs the
 // service-tracking feature to do anything, and invoicing-only would leave
-// them with nothing to do either, so Team + Combo is the one offer (₹1499/yr
-// flat, not 999+500 stacked).
+// them with nothing to do either, so Team + Combo is the one offer (₹1599/yr
+// flat, not 1149+450 stacked).
 export function tierAllowsTeam(tier: SubscriptionTier | null): boolean {
   return tier === 'combo';
 }
@@ -77,8 +79,8 @@ export function getPlanPricing(
     return { amount: 15, currency: 'USD' };
   }
   if (tier === 'combo')
-    return { amount: teamEnabled ? 1499 : 999, currency: 'INR' };
-  return { amount: 699, currency: 'INR' };
+    return { amount: teamEnabled ? 1599 : 1149, currency: 'INR' };
+  return { amount: 799, currency: 'INR' };
 }
 
 // Neither Play nor App Store subscription products carry a computable
@@ -101,18 +103,14 @@ export const SUBSCRIPTION_PRODUCT_IDS: Record<
 
 // Apple and Google both keep a cut of every in-app purchase — 15% under
 // Apple's Small Business Program and Google Play's standard rate for a
-// developer's first $1M/year, which this app qualifies for. A store product
-// priced at the plain web amount would net the business only 85% of it, so
-// the *list* price configured in Play Console / App Store Connect must be
-// grossed up: list = web amount ÷ (1 - commission), not web amount × 1.15
-// (that only nets 1.15 × 0.85 = 97.75% of the web amount back — still
-// short). Web/Razorpay purchases pay no such cut and are never marked up.
+// developer's first $1M/year. Store prices are intentionally higher than the
+// web price to help absorb that fee, but they are separately configured in
+// the stores and are not required to produce identical net proceeds.
 export const APP_STORE_COMMISSION_RATE = 0.15;
 
-// Each value is (web amount ÷ 0.85), rounded UP to a clean number in that
-// currency's existing style — rounding up is deliberate: undershooting would
-// net the business less than the web price after the store's cut. Verified:
-// every value here × 0.85 is >= the matching getPlanPricing amount.
+// These are expected store list prices. The app still displays the price
+// returned live by Play/App Store when available, because the consoles are
+// the authority for the actual charge.
 export function getAppStorePricing(
   tier: SubscriptionTier,
   teamEnabled: boolean,

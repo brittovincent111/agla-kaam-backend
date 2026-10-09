@@ -218,6 +218,12 @@ export class EmailService implements OnModuleInit {
     }
   }
 
+  /** A plain-text note to us (the admin), e.g. a lead asking to be called. */
+  async sendPlain(to: string, subject: string, text: string): Promise<void> {
+    const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    await this.dispatch(to, subject, text, `<div style="font-family:sans-serif;white-space:pre-wrap">${escaped}</div>`);
+  }
+
   async sendSignupVerificationOtp(to: string, code: string): Promise<void> {
     try {
       await this.dispatch(

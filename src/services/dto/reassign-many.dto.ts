@@ -2,6 +2,7 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsMongoId,
   IsOptional,
 } from 'class-validator';
@@ -17,4 +18,9 @@ export class ReassignManyDto {
   @IsOptional()
   @IsMongoId()
   assignedTechnicianId?: string | null;
+
+  // The owner is doing these themself. Ignores assignedTechnicianId.
+  @IsOptional()
+  @IsBoolean()
+  toOwner?: boolean;
 }

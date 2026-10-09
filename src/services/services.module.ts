@@ -13,6 +13,8 @@ import {
 } from '../businesses/schemas/business.schema';
 import { ServiceShareService } from './service-share.service';
 import { PublicServiceController } from './public-service.controller';
+import { JobPushService } from './job-push.service';
+import { ExpoPushService } from '../common/push/expo-push.service';
 
 @Module({
   imports: [
@@ -28,7 +30,13 @@ import { PublicServiceController } from './public-service.controller';
     forwardRef(() => AmcModule),
   ],
   controllers: [ServicesController, PublicServiceController],
-  providers: [ServicesService, S3Service, ServiceShareService],
+  providers: [
+    ServicesService,
+    S3Service,
+    ServiceShareService,
+    JobPushService,
+    ExpoPushService,
+  ],
   exports: [ServicesService, ServiceShareService],
 })
 export class ServicesModule {}

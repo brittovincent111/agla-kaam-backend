@@ -217,6 +217,39 @@ class EnvironmentVariables {
   @IsString()
   WHATSAPP_OVERRIDE_TO?: string;
 
+  // The automatic reply to campaign answers: 'off' turns it off.
+  @IsOptional()
+  @IsString()
+  WHATSAPP_BOT?: string;
+
+  // Gets a WhatsApp when a lead taps "Call me" (digits with country code).
+  @IsOptional()
+  @IsString()
+  WHATSAPP_ALERT_TO?: string;
+
+  // Where "Get the app" lands after the click is counted.
+  @IsOptional()
+  @IsString()
+  WHATSAPP_DOWNLOAD_URL?: string;
+
+  // The demo video sent on "Watch demo" (per language, English fallback).
+  @IsOptional()
+  @IsString()
+  WHATSAPP_DEMO_VIDEO_URL?: string;
+
+  @IsOptional()
+  @IsString()
+  WHATSAPP_DEMO_VIDEO_URL_HI?: string;
+
+  @IsOptional()
+  @IsString()
+  WHATSAPP_DEMO_VIDEO_URL_ML?: string;
+
+  // Approved template for the one day-3 follow-up; unset: no follow-up.
+  @IsOptional()
+  @IsString()
+  WHATSAPP_FOLLOWUP_TEMPLATE?: string;
+
   @IsOptional()
   @IsString()
   WHATSAPP_DAILY_LIMIT?: string;

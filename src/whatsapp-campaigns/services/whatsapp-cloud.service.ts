@@ -153,6 +153,51 @@ export class WhatsappCloudService {
   }
 
   /**
+   * A message with up to three tap buttons (titles at most 20 characters).
+   * Inside the 24-hour window only, like sendText; a tap comes back as an
+   * interactive button_reply carrying the button's id.
+   */
+  async sendButtons(to: string, body: string, buttons: { id: string; title: string }[]): Promise<string> {
+    if (!this.phoneNumberId) throw new WhatsappApiError('WHATSAPP_PHONE_NUMBER_ID is not set.');
+    const res = await this.graph<{ messages?: { id: string }[] }>('POST', `/${this.phoneNumberId}/messages`, {
+      messaging_product: 'whatsapp',
+      to: this.destination(to),
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: body },
+        action: {
+          buttons: buttons.slice(0, 3).map((b) => ({
+            type: 'reply',
+            reply: { id: b.id, title: b.title.slice(0, 20) },
+          })),
+        },
+      },
+    });
+    const id = res.messages?.[0]?.id;
+    if (!id) throw new WhatsappApiError('WhatsApp accepted the request but returned no message id.');
+    return id;
+  }
+
+  /** A message with one link button ("Download app" → url). 24-hour window only. */
+  async sendLinkButton(to: string, body: string, label: string, url: string): Promise<string> {
+    if (!this.phoneNumberId) throw new WhatsappApiError('WHATSAPP_PHONE_NUMBER_ID is not set.');
+    const res = await this.graph<{ messages?: { id: string }[] }>('POST', `/${this.phoneNumberId}/messages`, {
+      messaging_product: 'whatsapp',
+      to: this.destination(to),
+      type: 'interactive',
+      interactive: {
+        type: 'cta_url',
+        body: { text: body },
+        action: { name: 'cta_url', parameters: { display_text: label.slice(0, 20), url } },
+      },
+    });
+    const id = res.messages?.[0]?.id;
+    if (!id) throw new WhatsappApiError('WhatsApp accepted the request but returned no message id.');
+    return id;
+  }
+
+  /**
    * Meta's view of the sending number: quality rating (GREEN / YELLOW / RED)
    * and messaging tier (how many people a day it may start conversations with).
    */

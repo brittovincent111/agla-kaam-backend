@@ -1,3 +1,4 @@
+import { ownerPushTokens, OwnerPhones } from '../common/push/owner-tokens';
 import {
   BadRequestException,
   ConflictException,
@@ -66,6 +67,10 @@ import {
   PlayPurchase,
   PlayPurchaseDocument,
 } from '../subscriptions/schemas/play-purchase.schema';
+import {
+  QuickNote,
+  QuickNoteDocument,
+} from '../quick-notes/schemas/quick-note.schema';
 import { ServicePresetsService } from '../service-presets/service-presets.service';
 import { UpdateBusinessDto } from './dto/update-business.dto';
 import { DocumentTemplateId } from '../common/pdf/document-templates';
@@ -143,6 +148,9 @@ const IMAGE_EXTENSIONS: Record<string, string> = {
   'image/webp': 'webp',
 };
 
+// Phones an owner can be signed in on at once for pushes.
+const MAX_OWNER_PHONES = 5;
+
 @Injectable()
 export class BusinessesService implements OnModuleInit {
   private readonly logger = new Logger(BusinessesService.name);
@@ -184,6 +192,8 @@ export class BusinessesService implements OnModuleInit {
     private readonly applePurchaseModel: Model<ApplePurchaseDocument>,
     @InjectModel(PlayPurchase.name)
     private readonly playPurchaseModel: Model<PlayPurchaseDocument>,
+    @InjectModel(QuickNote.name)
+    private readonly quickNoteModel: Model<QuickNoteDocument>,
     private readonly configService: ConfigService,
     private readonly servicePresetsService: ServicePresetsService,
     private readonly s3Service: S3Service,
@@ -880,6 +890,7 @@ export class BusinessesService implements OnModuleInit {
       this.applePurchaseModel,
       this.playPurchaseModel,
       this.appFeedbackModel,
+      this.quickNoteModel,
     ];
   }
 
@@ -1107,7 +1118,19 @@ export class BusinessesService implements OnModuleInit {
 
   async updatePushToken(id: string, pushToken: string): Promise<void> {
     await this.releasePushToken(pushToken, { businessId: id });
-    await this.businessModel.findByIdAndUpdate(id, { pushToken }).exec();
+    // Moved to the end of the list (newest), which keeps the last 5 phones.
+    await this.businessModel.updateOne({ _id: id }, { $pull: { pushTokens: pushToken } }).exec();
+    await this.businessModel
+      .updateOne(
+        { _id: id },
+        { $set: { pushToken }, $push: { pushTokens: { $each: [pushToken], $slice: -MAX_OWNER_PHONES } } },
+      )
+      .exec();
+  }
+
+  /** Every phone to reach this business's owner on. */
+  ownerPushTokens(business: OwnerPhones): string[] {
+    return ownerPushTokens(business);
   }
 
   // A technician's token lives on their TeamMember row, not the business —
@@ -1126,9 +1149,16 @@ export class BusinessesService implements OnModuleInit {
 
   // Logout. Without this the phone kept receiving the signed-out account's
   // reminders (customer names, job details) until someone else signed in.
-  async clearPushToken(id: string): Promise<void> {
+  // With the phone's token, only that phone is signed out; without it (an
+  // older app), every phone is, as before.
+  async clearPushToken(id: string, pushToken?: string): Promise<void> {
+    if (pushToken) {
+      await this.businessModel.updateOne({ _id: id }, { $pull: { pushTokens: pushToken } }).exec();
+      await this.businessModel.updateOne({ _id: id, pushToken }, { $unset: { pushToken: '' } }).exec();
+      return;
+    }
     await this.businessModel
-      .updateOne({ _id: id }, { $unset: { pushToken: '' } })
+      .updateOne({ _id: id }, { $unset: { pushToken: '' }, $set: { pushTokens: [] } })
       .exec();
   }
 
@@ -1156,6 +1186,15 @@ export class BusinessesService implements OnModuleInit {
           { $unset: { pushToken: '' } },
         )
         .exec(),
+      this.businessModel
+        .updateMany(
+          {
+            pushTokens: pushToken,
+            ...(keep.businessId ? { _id: { $ne: keep.businessId } } : {}),
+          },
+          { $pull: { pushTokens: pushToken } },
+        )
+        .exec(),
       this.teamMemberModel
         .updateMany(
           {
@@ -1174,6 +1213,9 @@ export class BusinessesService implements OnModuleInit {
     if (!tokens.length) return;
     await this.businessModel
       .updateMany({ pushToken: { $in: tokens } }, { $unset: { pushToken: '' } })
+      .exec();
+    await this.businessModel
+      .updateMany({ pushTokens: { $in: tokens } }, { $pull: { pushTokens: { $in: tokens } } })
       .exec();
   }
 }

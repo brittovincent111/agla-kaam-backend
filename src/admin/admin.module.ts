@@ -20,6 +20,12 @@ import {
   AppFeedback,
   AppFeedbackSchema,
 } from '../app-feedback/schemas/app-feedback.schema';
+import {
+  TeamMember,
+  TeamMemberSchema,
+} from '../team-members/schemas/team-member.schema';
+import { ExpoPushService } from '../common/push/expo-push.service';
+import { OwnerSessionsService } from '../businesses/owner-sessions.service';
 
 @Module({
   imports: [
@@ -30,6 +36,7 @@ import {
       { name: Service.name, schema: ServiceSchema },
       { name: Invoice.name, schema: InvoiceSchema },
       { name: AppFeedback.name, schema: AppFeedbackSchema },
+      { name: TeamMember.name, schema: TeamMemberSchema },
     ]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
@@ -46,7 +53,7 @@ import {
     }),
   ],
   controllers: [AdminController],
-  providers: [AdminService, AdminAuthGuard],
+  providers: [AdminService, AdminAuthGuard, ExpoPushService, OwnerSessionsService],
   exports: [AdminService],
 })
 export class AdminModule {}

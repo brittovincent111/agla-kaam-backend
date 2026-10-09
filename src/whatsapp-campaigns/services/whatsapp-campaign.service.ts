@@ -327,13 +327,26 @@ export class WhatsappCampaignService {
       ])
       .exec();
     const leadIds = rows.map((r) => r.last.leadId).filter(Boolean);
+    const phonesWithoutLead = rows
+      .filter((r) => !r.last.leadId)
+      .map((r) => `+${r._id}`);
+
     const leads = await this.leadModel
-      .find({ _id: { $in: leadIds } })
-      .select('businessName city status isWhatsappOptedOut')
+      .find({
+        $or: [
+          ...(leadIds.length ? [{ _id: { $in: leadIds } }] : []),
+          ...(phonesWithoutLead.length ? [{ phoneNormalized: { $in: phonesWithoutLead } }] : []),
+        ],
+      })
+      .select('businessName city category phone notes rating reviewCount installedAt installedBusinessId phoneNormalized status isWhatsappOptedOut')
       .exec();
     const byId = new Map(leads.map((l) => [l._id.toString(), l]));
+    const byPhone = new Map(
+      leads.filter((l) => l.phoneNormalized).map((l) => [l.phoneNormalized!.replace(/\D/g, ''), l]),
+    );
+
     return rows.map((r) => {
-      const lead = r.last.leadId ? byId.get(r.last.leadId.toString()) : undefined;
+      const lead = (r.last.leadId ? byId.get(r.last.leadId.toString()) : undefined) ?? byPhone.get(r._id);
       const windowOpen = !!r.lastInAt && Date.now() - new Date(r.lastInAt).getTime() < 24 * 3600_000;
       return {
         phone: r._id,
@@ -348,7 +361,14 @@ export class WhatsappCampaignService {
           ? {
               _id: lead._id,
               businessName: lead.businessName,
+              category: lead.category,
               city: lead.city,
+              phone: lead.phone,
+              notes: lead.notes,
+              rating: lead.rating,
+              reviewCount: lead.reviewCount,
+              installedAt: lead.installedAt,
+              installedBusinessId: lead.installedBusinessId,
               status: lead.status,
               optedOut: lead.isWhatsappOptedOut,
             }
@@ -373,6 +393,12 @@ export class WhatsappCampaignService {
       );
     }
     const wamid = await this.cloud.sendText(digits, text);
+    // A person is answering now: the assistant stays out of this chat.
+    if (lastIn.leadId) {
+      await this.leadModel
+        .updateOne({ _id: lastIn.leadId, whatsappBotPausedAt: { $exists: false } }, { $set: { whatsappBotPausedAt: new Date() } })
+        .exec();
+    }
     return this.messageModel.create({
       direction: 'out',
       phone: digits,

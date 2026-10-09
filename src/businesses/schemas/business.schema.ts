@@ -218,8 +218,29 @@ export class Business {
   @Prop({ default: true })
   showPaymentDetailsOnInvoice: boolean;
 
+  // The owner's latest phone (kept for older app versions)…
   @Prop({ trim: true })
   pushToken?: string;
+
+  // …and every phone the owner is signed in on, newest last, at most 5 —
+  // an owner with two phones gets the morning push on both.
+  @Prop({ type: [String], default: [] })
+  pushTokens: string[];
+
+  // Owner sign-ins that are still valid, newest last. One login shared by a
+  // whole team would dodge paying for technician seats, so only the newest
+  // `maxPhones` sign-ins are kept: signing in on another phone signs the
+  // oldest out. Each remembers its phone's push token, to tell it so.
+  @Prop({
+    type: [{ sid: String, at: Date, pushToken: String, _id: false }],
+    default: [],
+  })
+  sessions: { sid: string; at: Date; pushToken?: string }[];
+
+  // How many phones the owner may be signed in on at once. Set from admin
+  // only (more phones is a paid extra); never shown in the app. Unset = 1.
+  @Prop({ min: 1, max: 20 })
+  maxPhones?: number;
 
   // Optional link to the business's Google Review page or Google Maps listing
   // (e.g. https://g.page/r/.../review). When configured, this is automatically

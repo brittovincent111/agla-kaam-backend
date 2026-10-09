@@ -6,7 +6,9 @@ import {
   Injectable,
   InternalServerErrorException,
   UnauthorizedException,
+  Optional,
 } from '@nestjs/common';
+import { OwnerSessionsService } from '../businesses/owner-sessions.service';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
@@ -47,6 +49,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly appleSignInService: AppleSignInService,
+    @Optional() private readonly ownerSessions?: OwnerSessionsService,
   ) {}
 
   async sendSignupOtp(email: string): Promise<{ devCode?: string }> {
@@ -611,11 +614,16 @@ export class AuthService {
     // value (including rows from before roles existed) signs in as technician.
     const role: 'technician' | 'manager' =
       teamMember.role === 'manager' ? 'manager' : 'technician';
+    // One phone per member: signing in here signs any other phone out.
+    const sid = this.ownerSessions
+      ? await this.ownerSessions.startMember(teamMember.id)
+      : undefined;
     const accessToken = await this.jwtService.signAsync({
       sub: business.id,
       email: teamMember.email,
       role,
       teamMemberId: teamMember.id,
+      ...(sid ? { sid } : {}),
     });
     return { accessToken, business, role };
   }
@@ -672,11 +680,17 @@ export class AuthService {
   }
 
   private async issueOwnerToken(business: BusinessDocument) {
+    // Each sign-in is its own session; past the owner's phone limit the
+    // oldest phone is signed out (see OwnerSessionsService).
+    const sid = this.ownerSessions
+      ? await this.ownerSessions.start(business.id)
+      : undefined;
     const accessToken = await this.jwtService.signAsync({
       sub: business.id,
       phone: business.phone,
       email: business.email,
       role: 'owner',
+      ...(sid ? { sid } : {}),
     });
     return { accessToken, business, role: 'owner' as const };
   }

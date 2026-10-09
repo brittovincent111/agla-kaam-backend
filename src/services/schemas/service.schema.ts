@@ -135,6 +135,12 @@ export class Service {
   @Prop()
   collectionPaymentId?: string;
 
+  // How much of collectionAmount the invoice took. Less when more was
+  // collected than the invoice still owed; the job card shows the
+  // difference so the owner can refund it or correct the amount.
+  @Prop()
+  collectionAppliedAmount?: number;
+
   @Prop({ required: true, enum: WARRANTY_PERIODS, default: 'none' })
   warrantyPeriod: string;
 
@@ -162,6 +168,12 @@ export class Service {
   // attribution record of who actually did it.
   @Prop({ type: Types.ObjectId, ref: 'TeamMember', index: true })
   assignedTechnicianId?: Types.ObjectId;
+
+  // The owner said "I'll do it myself": no technician, and not left to the
+  // customer's usual one either. Off the "needs a technician" list and off
+  // every technician's day. Cleared when the job is given to anyone.
+  @Prop()
+  assignedToOwner?: boolean;
 
   @Prop({ type: Types.ObjectId, ref: 'Amc', index: true })
   amcId?: Types.ObjectId;

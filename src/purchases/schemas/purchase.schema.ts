@@ -29,6 +29,28 @@ export class PurchaseItem {
 
 export const PurchaseItemSchema = SchemaFactory.createForClass(PurchaseItem);
 
+export const PURCHASE_PAYMENT_METHODS = ['cash', 'upi', 'bank_transfer', 'cheque', 'other'] as const;
+export type PurchasePaymentMethod = (typeof PURCHASE_PAYMENT_METHODS)[number];
+
+// One handing-over of money to the supplier for this bill, so the balance
+// can be traced: "₹5,000 by UPI on 9 Oct, ₹7,000 cash on 16 Oct".
+@Schema({ _id: true, timestamps: false })
+export class PurchasePayment {
+  @Prop({ required: true, min: 0.01 })
+  amount: number;
+
+  @Prop({ required: true, enum: PURCHASE_PAYMENT_METHODS, default: 'cash' })
+  method: PurchasePaymentMethod;
+
+  @Prop({ required: true })
+  paidAt: Date;
+
+  @Prop({ trim: true, maxlength: 200 })
+  note?: string;
+}
+
+export const PurchasePaymentSchema = SchemaFactory.createForClass(PurchasePayment);
+
 @Schema({ timestamps: true })
 export class Purchase {
   @Prop({ type: Types.ObjectId, ref: 'Business', required: true, index: true })
@@ -93,6 +115,11 @@ export class Purchase {
 
   @Prop({ trim: true })
   notes?: string;
+
+  // Payments recorded against this bill, oldest first. Rows from before this
+  // existed have none; their amountPaid stands on its own.
+  @Prop({ type: [PurchasePaymentSchema], default: [] })
+  payments: PurchasePayment[];
 }
 
 export const PurchaseSchema = SchemaFactory.createForClass(Purchase);

@@ -10,6 +10,8 @@ import {
   Purchase,
   PurchaseDocument,
   PurchaseItem,
+  PURCHASE_PAYMENT_METHODS,
+  type PurchasePaymentMethod,
 } from './schemas/purchase.schema';
 import { CreatePurchaseDto, PurchaseItemDto } from './dto/create-purchase.dto';
 import { UpdatePurchaseDto } from './dto/update-purchase.dto';
@@ -37,6 +39,18 @@ export function derivePaymentStatus(
   if (amountPaid >= totalAmount) return 'paid';
   return 'partially_paid';
 }
+
+// The payment-history method for a purchase's own paymentMethod: "credit"
+// means nothing was paid, so a part payment at the counter counts as other.
+function paymentEntryMethod(method?: string): PurchasePaymentMethod {
+  return (PURCHASE_PAYMENT_METHODS as readonly string[]).includes(method ?? '')
+    ? (method as PurchasePaymentMethod)
+    : method === undefined
+      ? 'cash'
+      : 'other';
+}
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
 
 @Injectable()
 export class PurchasesService {
@@ -99,6 +113,19 @@ export class PurchasesService {
       amountPaid,
       balanceDue: Math.max(0, totalAmount - amountPaid),
       notes: dto.notes?.trim(),
+      // Paid at the counter, in full or in part: the first entry of the
+      // bill's payment history.
+      payments:
+        amountPaid > 0
+          ? [
+              {
+                amount: amountPaid,
+                method: paymentEntryMethod(dto.paymentMethod),
+                paidAt: dto.purchaseDate ? new Date(dto.purchaseDate) : new Date(),
+                note: 'At purchase',
+              },
+            ]
+          : [],
     });
 
     return purchase.save();
@@ -248,12 +275,15 @@ export class PurchasesService {
         try {
           const newItem = await this.inventoryService.create(businessId, {
             name: item.name.trim(),
+            sku: item.sku?.trim() || undefined,
             hsnCode: item.hsnCode?.trim().toUpperCase(),
-            unit: 'pcs',
-            salePrice: item.costPrice > 0 ? item.costPrice * 1.2 : 0,
+            unit: item.unit?.trim() || 'pcs',
+            // What the purchase form asked; nothing is marked up behind the
+            // user's back.
+            salePrice: item.salePrice ?? item.costPrice,
             costPrice: item.costPrice,
             stockQuantity: 0,
-            minStockAlert: 5,
+            minStockAlert: item.minStockAlert ?? 5,
             isService: false,
           });
           validItemId = new Types.ObjectId((newItem as any)._id);
@@ -399,21 +429,88 @@ export class PurchasesService {
     businessId: string,
     id: string,
     amount: number,
+    details: { method?: PurchasePaymentMethod; paidAt?: string; note?: string } = {},
   ): Promise<Purchase> {
+    if (!Types.ObjectId.isValid(id)) throw new NotFoundException('Purchase not found');
     const purchase = await this.purchaseModel
       .findOne({ _id: id, businessId: idFilter(businessId) })
       .exec();
     if (!purchase) throw new NotFoundException('Purchase not found');
 
     const alreadyPaid = purchase.amountPaid ?? 0;
-    const amountPaid = Math.min(purchase.totalAmount, alreadyPaid + amount);
+    const owed = round2(Math.max(0, purchase.totalAmount - alreadyPaid));
+    if (owed <= 0) {
+      throw new BadRequestException('This bill is already fully paid.');
+    }
+    // More than is owed is taken as paying the bill off — the extra is not
+    // the supplier's on this bill.
+    const applied = round2(Math.min(amount, owed));
+    const paidAt = details.paidAt ? new Date(details.paidAt) : new Date();
+    if (Number.isNaN(paidAt.getTime())) throw new BadRequestException('Give a valid payment date.');
+
+    const amountPaid = round2(alreadyPaid + applied);
     purchase.amountPaid = amountPaid;
-    purchase.balanceDue = Math.max(0, purchase.totalAmount - amountPaid);
-    purchase.paymentStatus = derivePaymentStatus(
-      purchase.totalAmount,
-      amountPaid,
-    );
+    purchase.balanceDue = round2(Math.max(0, purchase.totalAmount - amountPaid));
+    purchase.paymentStatus = derivePaymentStatus(purchase.totalAmount, amountPaid);
+    const method = details.method ?? 'cash';
+    purchase.paymentMethod = method;
+    purchase.payments = [
+      ...(purchase.payments ?? []),
+      { amount: applied, method, paidAt, note: details.note?.trim() || undefined } as never,
+    ];
     return purchase.save();
+  }
+
+  /**
+   * One supplier's bills that still owe money, oldest first, with the total —
+   * the "You owe" card on the supplier's page. Bills logged before the
+   * supplier book existed carry only a name, so those match by name.
+   */
+  async unpaidForSupplier(
+    businessId: string,
+    supplierId: string,
+    supplierName?: string,
+  ): Promise<{
+    outstanding: number;
+    bills: {
+      _id: string;
+      purchaseNumber: string;
+      supplierInvoiceNumber?: string;
+      purchaseDate: Date;
+      totalAmount: number;
+      balanceDue: number;
+      currency: string;
+    }[];
+  }> {
+    if (!Types.ObjectId.isValid(supplierId)) return { outstanding: 0, bills: [] };
+    const name = supplierName?.trim();
+    const rows = await this.purchaseModel
+      .find({
+        businessId: idFilter(businessId),
+        balanceDue: { $gt: 0 },
+        $or: [
+          { supplierId: idFilter(supplierId) },
+          ...(name ? [{ supplierId: { $exists: false }, supplierName: name }] : []),
+        ],
+      })
+      .sort({ purchaseDate: 1, _id: 1 })
+      .limit(100)
+      .select('purchaseNumber supplierInvoiceNumber purchaseDate totalAmount balanceDue currency')
+      .lean()
+      .exec();
+    const bills = rows.map((r) => ({
+      _id: String(r._id),
+      purchaseNumber: r.purchaseNumber,
+      supplierInvoiceNumber: r.supplierInvoiceNumber,
+      purchaseDate: r.purchaseDate,
+      totalAmount: r.totalAmount,
+      balanceDue: r.balanceDue,
+      currency: r.currency,
+    }));
+    return {
+      outstanding: round2(bills.reduce((sum, b) => sum + b.balanceDue, 0)),
+      bills,
+    };
   }
 
   /**

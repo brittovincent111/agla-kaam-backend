@@ -9,6 +9,8 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { InjectConnection } from '@nestjs/mongoose';
+import type { Connection } from 'mongoose';
 import { SubscriptionsService } from '../../subscriptions/subscriptions.service';
 import { TeamMembersService } from '../../team-members/team-members.service';
 import {
@@ -46,7 +48,46 @@ export class JwtAuthGuard implements CanActivate {
     @Optional()
     @Inject(TeamMembersService)
     private readonly teamMembersService?: TeamMembersService,
+    @Optional()
+    @InjectConnection()
+    private readonly connection?: Connection,
   ) {}
+
+  /**
+   * An owner login is valid on a limited number of phones, a team member's
+   * on one; a sign-in pushed out by a newer one is refused with
+   * SIGNED_IN_ELSEWHERE. A passing
+   * answer is trusted for a minute, like a technician's.
+   */
+  private async assertSession(
+    modelName: 'Business' | 'TeamMember',
+    id: string,
+    sid?: string,
+  ): Promise<void> {
+    if (!this.connection) return;
+    const cacheKey = `session:${modelName}:${id}:${sid ?? '-'}`;
+    const cached = activeCache.get(cacheKey);
+    if (cached && cached.until >= Date.now()) return;
+    let business: { sessions?: { sid: string }[] } | null = null;
+    try {
+      business = await this.connection
+        .model(modelName)
+        .findById(id)
+        .select('sessions.sid')
+        .lean<{ sessions?: { sid: string }[] }>()
+        .exec();
+    } catch {
+      return; // A lookup failure says nothing about the login.
+    }
+    if (!business) return;
+    const sessions = business.sessions ?? [];
+    const current = sid
+      ? sessions.some((s) => s.sid === sid)
+      : sessions.length === 0;
+    if (!current) throw signedInElsewhere();
+    pruneActiveCache();
+    activeCache.set(cacheKey, { until: Date.now() + ACTIVE_TTL_MS, role: 'owner' });
+  }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
@@ -67,7 +108,12 @@ export class JwtAuthGuard implements CanActivate {
         email: payload.email,
         role: payload.role ?? 'owner',
         teamMemberId: payload.teamMemberId,
+        sid: typeof payload.sid === 'string' ? payload.sid : undefined,
       };
+
+      if (!isTeamMember(payload)) {
+        await this.assertSession('Business', payload.sub, request.business.sid);
+      }
 
       // A manager is a team member too: removed, out of seats or demoted, they
       // lose access exactly as a technician does.
@@ -108,6 +154,9 @@ export class JwtAuthGuard implements CanActivate {
         request.business.role =
           activeCache.get(cacheKey)?.role ?? request.business.role;
 
+        // One phone per member: a login used on a newer phone is refused here.
+        await this.assertSession('TeamMember', payload.teamMemberId, request.business.sid);
+
         if (this.subscriptionsService) {
           // One rule with or without Team: the technician must be inside the
           // business's seat limit — the free test seat without Team, the
@@ -138,7 +187,7 @@ export class JwtAuthGuard implements CanActivate {
       // A deactivated technician must not be reported as a bad token — that
       // sends them to the login screen to retry forever instead of telling
       // them their access was removed.
-      if (err instanceof ForbiddenException) {
+      if (err instanceof ForbiddenException || isSignedInElsewhere(err)) {
         throw err;
       }
       throw new UnauthorizedException('Invalid or expired token');
@@ -154,6 +203,27 @@ export class JwtAuthGuard implements CanActivate {
  * the message, whichever request hit it.
  */
 export const MEMBER_REMOVED_CODE = 'MEMBER_REMOVED';
+
+/**
+ * An owner sign-in pushed out by a newer one on another phone (past the
+ * owner's phone limit). 401 so older apps simply go to the login screen;
+ * `code` lets newer ones say why.
+ */
+export const SIGNED_IN_ELSEWHERE_CODE = 'SIGNED_IN_ELSEWHERE';
+function signedInElsewhere(): UnauthorizedException {
+  return new UnauthorizedException({
+    statusCode: 401,
+    error: 'Unauthorized',
+    code: SIGNED_IN_ELSEWHERE_CODE,
+    message:
+      'Your login was used on another phone, so you have been logged out here.',
+  });
+}
+function isSignedInElsewhere(err: unknown): boolean {
+  if (!(err instanceof UnauthorizedException)) return false;
+  const body = err.getResponse() as { code?: string } | string;
+  return typeof body === 'object' && body?.code === SIGNED_IN_ELSEWHERE_CODE;
+}
 export function memberRemoved(): ForbiddenException {
   return new ForbiddenException({
     statusCode: 403,

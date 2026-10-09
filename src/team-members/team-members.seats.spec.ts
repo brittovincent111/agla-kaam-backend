@@ -27,13 +27,14 @@ describe('technician seats', () => {
     expect(await make({ tier: null, team: false, active: [] }).seatInfo('b')).toMatchObject({ limit: 1, teamEnabled: false });
   });
 
-  it('Combo + Team: the standard 4 (1 free + 3)', async () => {
-    expect(await make({ tier: 'combo', team: true, active: ['a'] }).seatInfo('b')).toMatchObject({ limit: 4, used: 1, teamEnabled: true });
+  it('Combo + Team: 4 seats — the owner and 3 staff', async () => {
+    expect(await make({ tier: 'combo', team: true, active: ['a'] }).seatInfo('b')).toMatchObject({ limit: 3, seats: 4, used: 1, teamEnabled: true });
   });
 
   it('Combo + Team with seats granted by us: the higher of the two', async () => {
-    expect((await make({ tier: 'combo', team: true, granted: 12, active: [] }).seatInfo('b')).limit).toBe(12);
-    expect((await make({ tier: 'combo', team: true, granted: 3, active: [] }).seatInfo('b')).limit).toBe(4);
+    // Granted seats count the owner too: 12 seats is 11 staff.
+    expect((await make({ tier: 'combo', team: true, granted: 12, active: [] }).seatInfo('b')).limit).toBe(11);
+    expect((await make({ tier: 'combo', team: true, granted: 3, active: [] }).seatInfo('b')).limit).toBe(3);
   });
 
   it('granted seats do nothing once Team has lapsed', async () => {
@@ -41,8 +42,9 @@ describe('technician seats', () => {
   });
 
   it('a full paid team is told the seats are full, with no outside offer', async () => {
-    const s = make({ tier: 'combo', team: true, active: ['1', '2', '3', '4'] });
-    await expect((s as any).assertSeatAvailable('b')).rejects.toThrow(/All 4 technician seats are in use. Remove a technician/);
+    // The owner plus 3 staff fill the 4 seats.
+    const s = make({ tier: 'combo', team: true, active: ['1', '2', '3'] });
+    await expect((s as any).assertSeatAvailable('b')).rejects.toThrow(/All 4 seats are in use \(you and 3 staff\)/);
   });
 
   it('a full free plan is told about Combo + Team', async () => {
@@ -51,9 +53,9 @@ describe('technician seats', () => {
     await expect((s as any).assertSeatAvailable('b')).rejects.toThrow(/Upgrade to Combo \+ Team/);
   });
 
-  it('seats go to the earliest technicians when the limit is lower than the team', async () => {
+  it('a fourth staff member is past the 4 seats (owner + 3) and is the one locked out', async () => {
     const s = make({ tier: 'combo', team: true, active: ['1', '2', '3', '4', '5', '6', '7'] });
-    expect(await s.holdsSeat('b', '4')).toBe(true);
-    expect(await s.holdsSeat('b', '5')).toBe(false);
+    expect(await s.holdsSeat('b', '3')).toBe(true);
+    expect(await s.holdsSeat('b', '4')).toBe(false);
   });
 });

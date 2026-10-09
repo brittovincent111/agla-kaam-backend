@@ -7,7 +7,9 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
+import { JobPushService } from './job-push.service';
 import { InjectModel } from '@nestjs/mongoose';
 import { ModuleRef } from '@nestjs/core';
 import { Model, Types } from 'mongoose';
@@ -97,7 +99,32 @@ export class ServicesService {
     private readonly amcService: AmcService,
     private readonly s3Service: S3Service,
     private readonly moduleRef: ModuleRef,
+    @Optional() private readonly jobPush?: JobPushService,
   ) {}
+
+  /**
+   * Whose list a job is on: the technician it was given to, else the
+   * customer's usual technician — nobody when the owner took it.
+   */
+  private async jobHolder(
+    businessId: string,
+    service: ServiceDocument,
+  ): Promise<string | null> {
+    if (service.assignedToOwner) return null;
+    const assigned = service.assignedTechnicianId as unknown as
+      | { _id?: unknown }
+      | undefined;
+    if (assigned && typeof assigned === 'object' && assigned._id) {
+      return String(assigned._id);
+    }
+    if (service.assignedTechnicianId) return String(service.assignedTechnicianId);
+    const customer = await this.customersService
+      .findOne(businessId, String(service.customerId))
+      .catch(() => null);
+    return customer?.assignedTechnicianId
+      ? String(customer.assignedTechnicianId)
+      : null;
+  }
 
   async create(
     businessId: string,
@@ -193,6 +220,16 @@ export class ServicesService {
         businessId,
         dto.amcId,
         createdService._id.toString(),
+      );
+    }
+
+    // A visit booked onto a technician's day: tell them now.
+    if (status === 'pending' && createdService.booked) {
+      this.jobPush?.notifyNewJobs(
+        businessId,
+        await this.jobHolder(businessId, createdService),
+        [createdService._id.toString()],
+        viewer.teamMemberId,
       );
     }
 
@@ -302,6 +339,21 @@ export class ServicesService {
     // otherwise it is picked up when an invoice for the job is sent.
     if (collection && (saved.collectionAmount ?? 0) > 0) {
       await this.applyCollectionToInvoice(businessId, saved._id.toString());
+    }
+
+    // Staff took money at the door: tell the owner now.
+    if (
+      saved.collectedById &&
+      (saved.collectionMethod === 'cash' || saved.collectionMethod === 'upi')
+    ) {
+      this.jobPush?.notifyCollection(businessId, {
+        serviceId: saved._id.toString(),
+        amount: saved.collectionAmount ?? 0,
+        method: saved.collectionMethod,
+        collectorId: saved.collectedById,
+        customerId: String(saved.customerId),
+        serviceType: saved.serviceType,
+      });
     }
 
     if (service.amcId) {
@@ -489,6 +541,9 @@ export class ServicesService {
       if (applied === null) {
         service.collectionPaymentId = undefined;
         service.collectionAppliedAt = undefined;
+        service.collectionAppliedAmount = undefined;
+      } else {
+        service.collectionAppliedAmount = applied;
       }
     }
     const saved = await service.save();
@@ -535,14 +590,40 @@ export class ServicesService {
   async finishCollectionClaim(
     serviceId: string,
     paymentId: string | null,
+    appliedAmount?: number,
   ): Promise<void> {
     await this.serviceModel
       .updateOne(
         { _id: serviceId },
         paymentId
-          ? { $set: { collectionPaymentId: paymentId } }
+          ? {
+              $set: {
+                collectionPaymentId: paymentId,
+                collectionAppliedAmount: appliedAmount,
+              },
+            }
           : // Not applied after all (no open balance): release it for a later invoice.
-            { $unset: { collectionAppliedAt: 1 } },
+            { $unset: { collectionAppliedAt: 1, collectionAppliedAmount: 1 } },
+      )
+      .exec();
+  }
+
+  /**
+   * The job's door payment is no longer on any invoice (its invoice was
+   * cancelled, or the job was taken off it): free it so the next invoice
+   * for the job takes it.
+   */
+  async releaseCollection(serviceId: string): Promise<void> {
+    await this.serviceModel
+      .updateOne(
+        { _id: serviceId },
+        {
+          $unset: {
+            collectionAppliedAt: 1,
+            collectionPaymentId: 1,
+            collectionAppliedAmount: 1,
+          },
+        },
       )
       .exec();
   }
@@ -810,10 +891,22 @@ export class ServicesService {
     // to have no scoping at all.
     const service = await this.findOne(businessId, serviceId, viewer);
 
+    // Who had it before, to tell a technician when it lands on their day.
+    const touchesHolder = assignedTechnicianId !== undefined || !!booking?.book;
+    const before = touchesHolder
+      ? {
+          holder: await this.jobHolder(businessId, service),
+          booked: !!service.booked,
+        }
+      : null;
+
     if (assignedTechnicianId !== undefined) {
       if (isTechnician(viewer)) {
         throw new ForbiddenException('Only the owner can reassign a service.');
       }
+      // Given to someone (or back to the customer's usual technician): no
+      // longer the owner's own job.
+      service.assignedToOwner = undefined;
       if (assignedTechnicianId === null) {
         service.assignedTechnicianId = undefined;
       } else {
@@ -870,7 +963,20 @@ export class ServicesService {
       // from. Moving serviceDate leaves nextServiceDate where it was.
       service.nextServiceInterval = 'custom';
     }
-    return service.save();
+    const saved = await service.save();
+
+    if (before && saved.status === 'pending' && saved.booked) {
+      const holder = await this.jobHolder(businessId, saved);
+      if (holder && (holder !== before.holder || !before.booked)) {
+        this.jobPush?.notifyNewJobs(
+          businessId,
+          holder,
+          [saved._id.toString()],
+          viewer.teamMemberId,
+        );
+      }
+    }
+    return saved;
   }
 
   /**
@@ -1228,6 +1334,9 @@ export class ServicesService {
         { assignedTechnicianId: idFilter(teamMemberId) },
         {
           assignedTechnicianId: { $exists: false },
+          // The owner took this one; the customer's usual technician is not
+          // going.
+          assignedToOwner: { $ne: true },
           customerId: idsFilter(customerIds),
         },
       ],
@@ -1454,6 +1563,8 @@ export class ServicesService {
     const groups = new Map<string, unknown[]>();
     for (const id of active.keys()) groups.set(id, []);
     const unassigned: unknown[] = [];
+    // "I'll do it myself" jobs: the owner's own list, not "needs a technician".
+    const owner: unknown[] = [];
     for (const job of jobs) {
       const customer = job.customerId as unknown as {
         _id: Types.ObjectId;
@@ -1477,8 +1588,10 @@ export class ServicesService {
         customerName: customer?.name ?? '',
         customerAddress: customer?.address ?? '',
         viaCustomerDefault: !own && !!fallback,
+        isAmc: !!job.amcId,
       };
-      if (tech && active.has(tech)) groups.get(tech)!.push(row);
+      if (job.assignedToOwner && !own) owner.push(row);
+      else if (tech && active.has(tech)) groups.get(tech)!.push(row);
       else unassigned.push(row);
     }
     return {
@@ -1493,6 +1606,7 @@ export class ServicesService {
             b.jobs.length - a.jobs.length || a.name.localeCompare(b.name),
         ),
       unassigned,
+      owner,
       notBooked,
     };
   }
@@ -1506,10 +1620,12 @@ export class ServicesService {
     viewer: AuthenticatedBusiness,
     serviceIds: string[],
     technicianId: string | null,
+    toOwner = false,
   ): Promise<{ moved: number }> {
     if (isTechnician(viewer)) {
       throw new ForbiddenException('Only the owner can reassign jobs.');
     }
+    if (toOwner) technicianId = null;
     if (technicianId)
       await this.teamMembersService.assertActiveMember(
         businessId,
@@ -1518,6 +1634,19 @@ export class ServicesService {
     const ids = serviceIds
       .filter((id) => Types.ObjectId.isValid(id))
       .map((id) => new Types.ObjectId(id));
+    // Jobs that were not already this technician's, so only new ones are
+    // announced.
+    const arriving = technicianId && this.jobPush
+      ? await this.serviceModel
+          .find({
+            _id: { $in: ids },
+            businessId: idFilter(businessId),
+            status: 'pending',
+            assignedTechnicianId: { $nin: [technicianId, new Types.ObjectId(technicianId)] },
+          })
+          .distinct('_id')
+          .exec()
+      : [];
     const res = await this.serviceModel
       .updateMany(
         {
@@ -1525,16 +1654,27 @@ export class ServicesService {
           businessId: idFilter(businessId),
           status: 'pending',
         },
-        technicianId
-          ? {
-              $set: {
-                assignedTechnicianId: new Types.ObjectId(technicianId),
-                booked: true,
-              },
-            }
-          : { $unset: { assignedTechnicianId: 1 } },
+        toOwner
+          ? { $set: { assignedToOwner: true, booked: true }, $unset: { assignedTechnicianId: 1 } }
+          : technicianId
+            ? {
+                $set: {
+                  assignedTechnicianId: new Types.ObjectId(technicianId),
+                  booked: true,
+                },
+                $unset: { assignedToOwner: 1 },
+              }
+            : { $unset: { assignedTechnicianId: 1, assignedToOwner: 1 } },
       )
       .exec();
+    if (technicianId && arriving.length) {
+      this.jobPush?.notifyNewJobs(
+        businessId,
+        technicianId,
+        arriving.map(String),
+        viewer.teamMemberId,
+      );
+    }
     return { moved: res.modifiedCount };
   }
 

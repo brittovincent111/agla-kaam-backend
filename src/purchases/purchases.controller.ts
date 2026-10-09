@@ -59,11 +59,22 @@ export class PurchasesController {
     @Param('id') id: string,
     @Body() dto: RecordPurchasePaymentDto,
   ) {
-    return this.purchasesService.recordPayment(
-      business.businessId,
-      id,
-      dto.amount,
-    );
+    return this.purchasesService.recordPayment(business.businessId, id, dto.amount, {
+      method: dto.method,
+      paidAt: dto.paidAt,
+      note: dto.note,
+    });
+  }
+
+  // One supplier's unpaid bills and the total owed, for the supplier's page.
+  // supplierName also catches bills logged before the supplier book existed.
+  @Get('unpaid')
+  unpaidForSupplier(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    @Query('supplierId') supplierId: string,
+    @Query('supplierName') supplierName?: string,
+  ) {
+    return this.purchasesService.unpaidForSupplier(business.businessId, supplierId, supplierName);
   }
 
   // Same template/accent gating as the invoice download: a locked template

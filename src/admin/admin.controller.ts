@@ -12,9 +12,11 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import { AdminService } from './admin.service';
+import { AdminService, BroadcastAudience } from './admin.service';
 import { AdminLoginDto } from './dto/admin-login.dto';
 import { AdminAuthGuard } from './admin-auth.guard';
+import { UpdateOwnerPhonesDto } from './dto/update-owner-phones.dto';
+import { OwnerSessionsService } from '../businesses/owner-sessions.service';
 import { AppVersionService } from '../app-version/app-version.service';
 import { UpdateAppVersionDto } from '../app-version/dto/update-app-version.dto';
 
@@ -23,6 +25,7 @@ export class AdminController {
   constructor(
     private readonly adminService: AdminService,
     private readonly appVersion: AppVersionService,
+    private readonly ownerSessions: OwnerSessionsService,
   ) {}
 
   @Throttle({ default: { limit: 5, ttl: 60000 } })
@@ -101,6 +104,17 @@ export class AdminController {
     );
   }
 
+  // How many phones the owner's login works on at once (a paid extra), or
+  // sign every phone out — e.g. a lost phone.
+  @UseGuards(AdminAuthGuard)
+  @Patch('businesses/:id/phones')
+  updatePhones(@Param('id') id: string, @Body() body: UpdateOwnerPhonesDto) {
+    return this.ownerSessions.setLimit(id, {
+      maxPhones: body.maxPhones,
+      signOutAll: body.signOutAll,
+    });
+  }
+
   // Editable at runtime on purpose: the moment you need to force an update is
   // usually the moment something is broken, which is the worst time to be
   // waiting on a deploy.
@@ -119,12 +133,27 @@ export class AdminController {
   @UseGuards(AdminAuthGuard)
   @Post('broadcast-push')
   broadcastPush(
-    @Body() body: { title: string; body: string; tradeType?: string },
+    @Body()
+    body: {
+      title: string;
+      body: string;
+      tradeType?: string;
+      audience?: BroadcastAudience;
+      target?: string;
+      link?: string;
+    },
   ) {
+    const audience: BroadcastAudience =
+      body.audience === 'owners' || body.audience === 'staff'
+        ? body.audience
+        : 'all';
     return this.adminService.broadcastPushNotification(
       body.title,
       body.body,
-      body.tradeType,
+      body.tradeType || undefined,
+      audience,
+      body.target || undefined,
+      body.link,
     );
   }
 }

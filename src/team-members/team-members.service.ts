@@ -308,6 +308,8 @@ export class TeamMembersService {
         { assignedTechnicianId: idFilter(teamMemberId) },
         {
           assignedTechnicianId: { $exists: false },
+          // A job the owner took on themself is not this technician's.
+          assignedToOwner: { $ne: true },
           customerId: idsFilter(assignedCustomerIds),
         },
       ];
@@ -369,7 +371,15 @@ export class TeamMembersService {
    * standard TEAM_SEAT_LIMIT or the seats granted to it (whichever is
    * higher); without Team, the FREE_TIER_TEAM_LIMIT test seat.
    */
-  async seatInfo(businessId: string): Promise<{ used: number; limit: number; teamEnabled: boolean; granted: number | null }> {
+  async seatInfo(businessId: string): Promise<{
+    used: number;
+    // Staff seats: technicians and managers the business may have active.
+    limit: number;
+    // All seats, the owner's included (limit + 1) — what plans are sold as.
+    seats: number;
+    teamEnabled: boolean;
+    granted: number | null;
+  }> {
     const [tier, teamAddon, business, used] = await Promise.all([
       this.subscriptionsService.getActiveTier(businessId),
       this.subscriptionsService.hasActiveTeamAddon(businessId),
@@ -380,8 +390,10 @@ export class TeamMembersService {
     ]);
     const teamEnabled = tierAllowsTeam(tier) && teamAddon;
     const granted = business?.teamSeatLimit ?? null;
-    const limit = teamEnabled ? Math.max(TEAM_SEAT_LIMIT, granted ?? 0) : FREE_TIER_TEAM_LIMIT;
-    return { used, limit, teamEnabled, granted };
+    // The owner holds one of the plan's seats; the rest are for staff.
+    const seats = teamEnabled ? Math.max(TEAM_SEAT_LIMIT, granted ?? 0) : FREE_TIER_TEAM_LIMIT + 1;
+    const limit = seats - 1;
+    return { used, limit, seats, teamEnabled, granted };
   }
 
   // Shared by create() (a brand-new seat) and setActive() (reactivating one)
@@ -394,12 +406,12 @@ export class TeamMembersService {
 
     if (!teamEnabled) {
       throw new ForbiddenException(
-        `Your plan includes ${FREE_TIER_TEAM_LIMIT} free technician seat to test team features. Upgrade to Combo + Team (₹1499/year) to add up to ${TEAM_SEAT_LIMIT} technicians.`,
+        `Your plan includes ${FREE_TIER_TEAM_LIMIT} free technician seat to test team features. Upgrade to Combo + Team (₹1,599/year) for ${TEAM_SEAT_LIMIT} seats — you and ${TEAM_SEAT_LIMIT - 1} staff.`,
       );
     }
     // Paid team that is full: more seats come from us, not from a store upgrade.
     throw new ForbiddenException(
-      `All ${limit} technician seats are in use. Remove a technician to add someone new.`,
+      `All ${limit + 1} seats are in use (you and ${limit} staff). Remove someone to add someone new.`,
     );
   }
 
@@ -485,6 +497,28 @@ export class TeamMembersService {
     await this.teamMemberModel
       .updateMany({ pushToken: { $in: tokens } }, { $unset: { pushToken: '' } })
       .exec();
+  }
+
+  /** A member's name for a message, or null. */
+  async nameOf(businessId: string, teamMemberId: string): Promise<string | null> {
+    if (!Types.ObjectId.isValid(teamMemberId)) return null;
+    const member = await this.teamMemberModel
+      .findOne({ _id: teamMemberId, businessId: idFilter(businessId) })
+      .select('name')
+      .lean()
+      .exec();
+    return member?.name || null;
+  }
+
+  /** One active member's phone, or null — for pushes about their own work. */
+  async pushTokenOf(businessId: string, teamMemberId: string): Promise<string | null> {
+    if (!Types.ObjectId.isValid(teamMemberId)) return null;
+    const member = await this.teamMemberModel
+      .findOne({ _id: teamMemberId, businessId: idFilter(businessId), active: true })
+      .select('pushToken')
+      .lean()
+      .exec();
+    return member?.pushToken || null;
   }
 
   findNotifiableForBusiness(businessId: string) {

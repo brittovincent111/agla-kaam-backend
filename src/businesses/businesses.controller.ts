@@ -7,6 +7,7 @@ import {
   NotFoundException,
   Patch,
   Post,
+  Query,
   Res,
   UploadedFile,
   UseGuards,
@@ -63,10 +64,14 @@ function detectImageMimeType(buffer: Buffer): string | null {
   return null;
 }
 
+import { OwnerSessionsService } from './owner-sessions.service';
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('businesses')
 export class BusinessesController {
-  constructor(private readonly businessesService: BusinessesService) {}
+  constructor(
+    private readonly businessesService: BusinessesService,
+    private readonly ownerSessions: OwnerSessionsService,
+  ) {}
 
   // Open to technicians too — read-only, and the app needs it to show the
   // business name/phone in headers and WhatsApp message templates.
@@ -193,11 +198,25 @@ export class BusinessesController {
         business.teamMemberId,
         dto.pushToken,
       );
+      if (business.sid) {
+        await this.ownerSessions.attachMemberPushToken(
+          business.teamMemberId,
+          business.sid,
+          dto.pushToken,
+        );
+      }
     } else {
       await this.businessesService.updatePushToken(
         business.businessId,
         dto.pushToken,
       );
+      if (business.sid) {
+        await this.ownerSessions.attachPushToken(
+          business.businessId,
+          business.sid,
+          dto.pushToken,
+        );
+      }
     }
     return { success: true };
   }
@@ -205,13 +224,24 @@ export class BusinessesController {
   // Called by the app right before logout, owner or technician — routed the
   // same way as the POST above, so it only ever clears the caller's own token.
   @Delete('me/push-token')
-  async clearPushToken(@CurrentBusiness() business: AuthenticatedBusiness) {
+  async clearPushToken(
+    @CurrentBusiness() business: AuthenticatedBusiness,
+    // This phone's token, so only this phone is signed out (newer apps).
+    @Query('token') token?: string,
+  ) {
     if (isTeamMember(business) && business.teamMemberId) {
       await this.businessesService.clearTeamMemberPushToken(
         business.teamMemberId,
       );
+      if (business.sid) {
+        await this.ownerSessions.endMember(business.teamMemberId, business.sid);
+      }
     } else {
-      await this.businessesService.clearPushToken(business.businessId);
+      await this.businessesService.clearPushToken(business.businessId, token?.trim() || undefined);
+      // Signing out frees this phone's place under the phone limit.
+      if (business.sid) {
+        await this.ownerSessions.end(business.businessId, business.sid);
+      }
     }
     return { success: true };
   }

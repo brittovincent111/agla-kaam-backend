@@ -41,6 +41,9 @@ export class WhatsappMessage {
   handled: boolean;
 
   @Prop() sentBy?: string;
+
+  // Sent by the assistant, not a person — shown as "auto" in the inbox.
+  @Prop() auto?: boolean;
 }
 
 export const WhatsappMessageSchema = SchemaFactory.createForClass(WhatsappMessage);

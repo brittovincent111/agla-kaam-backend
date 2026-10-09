@@ -7,6 +7,7 @@ import { AmcController } from './amc.controller';
 import { AmcCron } from './amc.cron';
 import { CustomersModule } from '../customers/customers.module';
 import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
+import { TeamMembersModule } from '../team-members/team-members.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
     ]),
     forwardRef(() => CustomersModule),
     SubscriptionsModule,
+    TeamMembersModule,
   ],
   controllers: [AmcController],
   providers: [AmcService, AmcCron],

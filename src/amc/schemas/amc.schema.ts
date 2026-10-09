@@ -74,6 +74,12 @@ export class Amc {
 
   @Prop({ trim: true, maxlength: 1000 })
   notes?: string;
+
+  // The technician every visit of this contract goes to, ahead of the
+  // customer's usual technician. Optional: without it visits follow the
+  // customer. One visit reassigned on its own job keeps that change.
+  @Prop({ type: String })
+  technicianId?: string;
 }
 
 export const AmcSchema = SchemaFactory.createForClass(Amc);

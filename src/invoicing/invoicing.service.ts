@@ -658,7 +658,30 @@ export class InvoicingService {
       invoice.status = invoice.balanceDue <= 0 ? 'paid' : 'partially_paid';
     }
 
-    return invoice.save();
+    const saved = await invoice.save();
+    if (saved.status === 'draft') return saved;
+
+    // A sent invoice whose jobs changed: a job taken off gives its door
+    // payment back to the job, and a job added brings its door payment
+    // with it, exactly as if the invoice had been sent like this.
+    const onInvoice = new Set(
+      saved.items
+        .map((i) => (i.serviceId ? i.serviceId.toString() : null))
+        .filter((id): id is string => !!id),
+    );
+    const released = await this.releaseJobCollections(
+      businessId,
+      saved._id,
+      onInvoice,
+      false,
+    );
+    const applied = await this.applyJobCollections(businessId, [
+      ...onInvoice,
+      ...released,
+    ]);
+    return released.length || applied
+      ? this.findOne(businessId, invoiceId)
+      : saved;
   }
 
   async send(businessId: string, invoiceId: string): Promise<InvoiceDocument> {
@@ -779,6 +802,7 @@ export class InvoicingService {
         await this.servicesService.finishCollectionClaim(
           serviceId,
           payment._id.toString(),
+          amount,
         );
         applied = true;
       } catch (err) {
@@ -813,7 +837,69 @@ export class InvoicingService {
       throw new BadRequestException('This invoice can no longer be cancelled');
     }
     await this.restoreStock(businessId, before.stockDeductions);
+    // Money taken at the door was the customer's payment for the job, not
+    // for this piece of paper: it comes off the cancelled invoice and goes
+    // on the job's next one (now, if one is already open), so the
+    // replacement invoice does not ask for it again.
+    const released = await this.releaseJobCollections(
+      businessId,
+      invoice._id,
+      new Set(),
+      true,
+    );
+    if (released.length) {
+      await this.applyJobCollections(businessId, released);
+    }
     return this.findOne(businessId, invoiceId);
+  }
+
+  /**
+   * Takes door payments off this invoice for every job not in `keep`,
+   * deleting the payment and freeing the job's collection for its next
+   * invoice. Returns the jobs released. A cancelled invoice keeps its
+   * status; any other is re-derived from what is still paid.
+   */
+  private async releaseJobCollections(
+    businessId: string,
+    invoiceId: Types.ObjectId,
+    keep: Set<string>,
+    cancelled: boolean,
+  ): Promise<string[]> {
+    const payments = await this.paymentModel
+      .find({
+        businessId: idFilter(businessId),
+        invoiceId: idFilter(invoiceId.toString()),
+      })
+      .select('_id amount')
+      .lean();
+    if (!payments.length) return [];
+    const amountOf = new Map(payments.map((p) => [String(p._id), p.amount]));
+    const jobs = await this.serviceModel
+      .find({
+        businessId: idFilter(businessId),
+        collectionPaymentId: { $in: [...amountOf.keys()] },
+      })
+      .select('_id collectionPaymentId')
+      .lean();
+
+    const released: string[] = [];
+    for (const job of jobs) {
+      const serviceId = String(job._id);
+      if (keep.has(serviceId)) continue;
+      const paymentId = String(job.collectionPaymentId);
+      const amount = amountOf.get(paymentId) ?? 0;
+      await this.paymentModel.deleteOne({ _id: paymentId }).exec();
+      if (cancelled) {
+        await this.invoiceModel
+          .updateOne({ _id: invoiceId }, { $inc: { amountPaid: -amount } })
+          .exec();
+      } else {
+        await this.shiftAmountPaid(invoiceId, -amount);
+      }
+      await this.servicesService.releaseCollection(serviceId);
+      released.push(serviceId);
+    }
+    return released;
   }
 
   async remove(businessId: string, invoiceId: string): Promise<void> {

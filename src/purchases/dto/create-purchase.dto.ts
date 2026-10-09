@@ -34,6 +34,28 @@ export class PurchaseItemDto {
   @IsNumber()
   @Min(0)
   costPrice: number;
+
+  // The rest are only used when this line creates a new stock item.
+  // Sale price omitted: the same as the cost.
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  salePrice?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  sku?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  unit?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  minStockAlert?: number;
 }
 
 export class CreatePurchaseDto {

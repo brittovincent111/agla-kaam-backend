@@ -28,16 +28,78 @@ import {
   AppFeedbackDocument,
 } from '../app-feedback/schemas/app-feedback.schema';
 import { AdminLoginDto } from './dto/admin-login.dto';
-import { isFetchPolyfilled } from '../common/http/fetch-polyfill';
+import { ownerPushTokens } from '../common/push/owner-tokens';
+import {
+  TeamMember,
+  TeamMemberDocument,
+} from '../team-members/schemas/team-member.schema';
+import {
+  ExpoPushService,
+  PushMessage,
+} from '../common/push/expo-push.service';
 import { idFilter } from '../common/utils/id-match';
 
-// Estimated yearly price values per tier (in INR)
+// Estimated yearly web price values per tier (in INR). Store purchases may
+// settle at different prices, so these are an annual run-rate estimate, not
+// recognised revenue.
 const TIER_PRICES_INR: Record<string, number> = {
-  reminders: 1499,
-  invoicing: 1499,
-  combo: 2499,
-  combo_team: 3999,
+  reminders: 799,
+  invoicing: 799,
+  combo: 1149,
+  combo_team: 1599,
 };
+
+export type BroadcastAudience = 'all' | 'owners' | 'staff';
+
+/**
+ * Where a tapped broadcast can take someone. Must match BROADCAST_SCREENS in
+ * the app's notificationRouting.ts. 'UpdateApp' opens the store listing and
+ * 'Link' a web page; staff sent an owner-only screen land on Home.
+ */
+export const BROADCAST_TARGETS = [
+  'Home',
+  'Services',
+  'Customers',
+  'QuickNotes',
+  'CalculatorHub',
+  'InvoiceList',
+  'QuotationList',
+  'TeamDay',
+  'Reports',
+  'Team',
+  'Paywall',
+  'Suppliers',
+  'PurchaseList',
+  'InventoryList',
+  'AmcList',
+  'Settings',
+  'UpdateApp',
+  'Link',
+] as const;
+export type BroadcastTarget = (typeof BROADCAST_TARGETS)[number];
+
+/** What a broadcast push carries for the app to open, or an error to show. */
+export function broadcastTapData(
+  target?: string,
+  link?: string,
+): Record<string, unknown> {
+  if (!target) return { type: 'broadcast' };
+  if (!(BROADCAST_TARGETS as readonly string[]).includes(target)) {
+    throw new BadRequestException(`Unknown screen "${target}"`);
+  }
+  if (target !== 'Link') return { type: 'broadcast', screen: target };
+  const url = (link ?? '').trim();
+  let ok = false;
+  try {
+    ok = new URL(url).protocol === 'https:';
+  } catch {
+    ok = false;
+  }
+  if (!ok) {
+    throw new BadRequestException('The link must be a full https:// web address');
+  }
+  return { type: 'broadcast', screen: 'Link', url };
+}
 
 @Injectable()
 export class AdminService {
@@ -56,6 +118,9 @@ export class AdminService {
     private readonly invoiceModel: Model<InvoiceDocument>,
     @InjectModel(AppFeedback.name)
     private readonly feedbackModel: Model<AppFeedbackDocument>,
+    @InjectModel(TeamMember.name)
+    private readonly teamMemberModel: Model<TeamMemberDocument>,
+    private readonly expoPushService: ExpoPushService,
   ) {}
 
   async login(
@@ -166,7 +231,7 @@ export class AdminService {
     for (const sub of activeSubscriptionsList) {
       const key = sub.teamEnabled ? `${sub.tier}_team` : sub.tier;
       tierCounts[key] = (tierCounts[key] || 0) + 1;
-      const price = TIER_PRICES_INR[key] || TIER_PRICES_INR[sub.tier] || 1499;
+      const price = TIER_PRICES_INR[key] || TIER_PRICES_INR[sub.tier] || 799;
       calculatedARR += price;
     }
 
@@ -362,6 +427,10 @@ export class AdminService {
         activeTechnicians: await this.teamMemberCount(business._id),
         grantedSeats: business.teamSeatLimit ?? null,
       },
+      phones: {
+        allowed: business.maxPhones ?? 1,
+        signedIn: business.sessions?.length ?? 0,
+      },
     };
   }
 
@@ -422,71 +491,114 @@ export class AdminService {
     title: string,
     body: string,
     tradeType?: string,
+    audience: BroadcastAudience = 'all',
+    target?: string,
+    link?: string,
   ) {
-    const filter: any = { pushToken: { $exists: true, $ne: '' } };
+    // Checked before anything is looked up or sent.
+    const data = broadcastTapData(target, link);
+    // The app saves a trade as "AC repair" or "AC repair • split ACs", so a
+    // trade matches on its start, ignoring case.
+    const businessFilter: Record<string, unknown> = {};
     if (tradeType) {
-      filter.tradeType = tradeType;
+      const escaped = tradeType.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      businessFilter.tradeType = { $regex: `^${escaped}`, $options: 'i' };
     }
 
-    const businesses = await this.businessModel
-      .find(filter)
-      .select('pushToken')
-      .exec();
-    const tokens = businesses.map((b) => b.pushToken).filter(Boolean);
+    const tokens = new Set<string>();
 
-    if (tokens.length === 0) {
+    // Owners: every phone each owner is signed in on.
+    if (audience === 'all' || audience === 'owners') {
+      const owners = await this.businessModel
+        .find({
+          ...businessFilter,
+          $or: [
+            { pushToken: { $exists: true, $ne: '' } },
+            { 'pushTokens.0': { $exists: true } },
+          ],
+        })
+        .select('pushToken pushTokens')
+        .lean()
+        .exec();
+      for (const owner of owners) {
+        for (const token of ownerPushTokens(owner)) tokens.add(token);
+      }
+    }
+
+    // Staff: active technicians and managers, of the chosen trade's
+    // businesses when a trade is picked.
+    if (audience === 'all' || audience === 'staff') {
+      const staffFilter: Record<string, unknown> = {
+        active: true,
+        pushToken: { $exists: true, $ne: '' },
+      };
+      if (tradeType) {
+        const ids = await this.businessModel
+          .find(businessFilter)
+          .distinct('_id')
+          .exec();
+        staffFilter.businessId = { $in: [...ids, ...ids.map(String)] };
+      }
+      const staff = await this.teamMemberModel
+        .find(staffFilter)
+        .select('pushToken')
+        .lean()
+        .exec();
+      for (const member of staff) {
+        if (member.pushToken) tokens.add(member.pushToken);
+      }
+    }
+
+    if (!tokens.size) {
       return {
         message: 'No registered push tokens found for targeted audience.',
         sentCount: 0,
       };
     }
 
-    const messages = tokens.map((token) => ({
-      to: token,
-      sound: 'default',
+    const messages: PushMessage[] = [...tokens].map((to) => ({
+      to,
       title,
       body,
-      data: { type: 'broadcast' },
+      data,
     }));
+    const outcome = await this.expoPushService.send(messages);
 
-    // These lines exist to make a failed broadcast diagnosable from `pm2
-    // logs` alone. Previously the only signal was the error's message in the
-    // HTTP response, with nothing server-side saying which runtime, which
-    // fetch implementation, or what Expo actually replied.
+    // Uninstalled apps: forget them, so the next broadcast's count is real.
+    if (outcome.invalidTokens.length) {
+      const dead = outcome.invalidTokens;
+      await Promise.all([
+        this.businessModel
+          .updateMany({ pushTokens: { $in: dead } }, { $pull: { pushTokens: { $in: dead } } })
+          .exec(),
+        this.businessModel
+          .updateMany({ pushToken: { $in: dead } }, { $unset: { pushToken: '' } })
+          .exec(),
+        this.teamMemberModel
+          .updateMany({ pushToken: { $in: dead } }, { $unset: { pushToken: '' } })
+          .exec(),
+      ]);
+    }
+
     console.log(
-      `[broadcast] node=${process.version} fetch=${typeof fetch}` +
-        `${isFetchPolyfilled() ? ' (polyfill)' : ' (native)'} tokens=${tokens.length}`,
+      `[broadcast] audience=${audience}${tradeType ? ` trade=${tradeType}` : ''} ` +
+        `phones=${tokens.size} sent=${outcome.sent} failed=${outcome.failed} ` +
+        `uninstalled=${outcome.invalidTokens.length}`,
     );
 
-    try {
-      const response = await fetch('https://exp.host/--/api/v2/push/send', {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'Accept-encoding': 'gzip, deflate',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(messages),
-      });
-
-      const resData = await response.json();
-      console.log(
-        `[broadcast] Expo HTTP ${response.status} -> ${JSON.stringify(resData).slice(0, 500)}`,
-      );
-      return {
-        message: `Successfully dispatched broadcast push notification to ${tokens.length} devices.`,
-        sentCount: tokens.length,
-        expoResponse: resData,
-      };
-    } catch (err: any) {
-      // Log the stack, not just the message: "fetch is not defined" and a
-      // DNS failure look identical in the response body.
-      console.error('[broadcast] FAILED:', err?.stack ?? err);
-      return {
-        message: `Failed to dispatch push notification: ${err.message}`,
-        sentCount: 0,
-      };
+    const parts = [`Sent to ${outcome.sent} of ${tokens.size} phones.`];
+    if (outcome.invalidTokens.length) {
+      parts.push(`${outcome.invalidTokens.length} had uninstalled the app and were removed.`);
     }
+    if (outcome.failed > outcome.invalidTokens.length) {
+      parts.push(`${outcome.failed - outcome.invalidTokens.length} failed — check the server log.`);
+    }
+    return {
+      message: parts.join(' '),
+      sentCount: outcome.sent,
+      failedCount: outcome.failed,
+      removedCount: outcome.invalidTokens.length,
+    };
   }
 }
 

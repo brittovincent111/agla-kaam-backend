@@ -120,6 +120,7 @@ export class ServicesController {
       business,
       dto.serviceIds,
       dto.assignedTechnicianId ?? null,
+      dto.toOwner === true,
     );
   }
 

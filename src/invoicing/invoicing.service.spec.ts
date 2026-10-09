@@ -62,7 +62,10 @@ function build() {
   };
   const service = new InvoicingService(
     invoiceModel,
-    {} as any,
+    // No payments: cancelling has no door collections to hand back.
+    {
+      find: () => ({ select: () => ({ lean: () => Promise.resolve([]) }) }),
+    } as any,
     { findOne: jest.fn().mockResolvedValue({}) } as any,
     {} as any,
     { getActiveTier: jest.fn().mockResolvedValue('combo') } as any,

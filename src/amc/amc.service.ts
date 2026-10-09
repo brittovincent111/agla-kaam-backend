@@ -17,6 +17,7 @@ import { Service, ServiceDocument } from '../services/schemas/service.schema';
 import { CreateAmcDto } from './dto/create-amc.dto';
 import { UpdateAmcDto } from './dto/update-amc.dto';
 import { CustomersService } from '../customers/customers.service';
+import { TeamMembersService } from '../team-members/team-members.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 import { FREE_TIER_AMC_LIMIT } from '../common/constants/subscription-options';
 import {
@@ -88,6 +89,7 @@ export class AmcService {
     @Inject(forwardRef(() => CustomersService))
     private readonly customersService: CustomersService,
     private readonly subscriptionsService: SubscriptionsService,
+    private readonly teamMembersService: TeamMembersService,
   ) {}
 
   private async nextContractNumber(businessId: string): Promise<string> {
@@ -181,7 +183,7 @@ export class AmcService {
     const activeAmcs = await this.amcModel
       .find({ businessId: idFilter(businessId), status: 'active' })
       .select(
-        'customerId contractNumber planName serviceType startDate notes visitSchedule',
+        'customerId contractNumber planName serviceType startDate notes visitSchedule technicianId',
       )
       .lean()
       .exec();
@@ -299,6 +301,7 @@ export class AmcService {
         serviceType: string;
         startDate?: Date;
         notes?: string;
+        technicianId?: string;
       };
     }[],
   ): Promise<void> {
@@ -332,6 +335,11 @@ export class AmcService {
         nextServiceInterval: nextVisit ? 'custom' : 'none',
         nextServiceDate: date,
         amcId: amc._id,
+        // The contract's technician, when it has one; otherwise the visit
+        // follows the customer's usual technician (no technician of its own).
+        ...(amc.technicianId && Types.ObjectId.isValid(amc.technicianId)
+          ? { assignedTechnicianId: new Types.ObjectId(amc.technicianId) }
+          : {}),
         notes: amc.notes
           ? `AMC ${amc.contractNumber}: ${amc.notes}`
           : `AMC ${amc.contractNumber} - Visit #${visit.visitNumber}`,
@@ -403,6 +411,10 @@ export class AmcService {
     }
 
     await this.customersService.findOne(businessId, dto.customerId);
+    const technicianId = dto.technicianId || undefined;
+    if (technicianId) {
+      await this.teamMembersService.assertActiveMember(businessId, technicianId);
+    }
 
     const startDate = new Date(dto.startDate);
     const endDate = new Date(dto.endDate);
@@ -437,6 +449,7 @@ export class AmcService {
       status: 'active',
       visitSchedule,
       notes: dto.notes,
+      technicianId,
     });
 
     await this.syncAmcServices(businessId, { force: true });
@@ -753,6 +766,19 @@ export class AmcService {
     if (dto.status) amc.status = dto.status;
     if (dto.notes !== undefined) amc.notes = dto.notes;
 
+    // The contract's technician changed: visits already raised that were
+    // following the contract (or nobody) move with it; one reassigned on
+    // its own job to someone else stays where it was put.
+    let technicianMove: { from?: string; to?: string } | null = null;
+    if (dto.technicianId !== undefined) {
+      const to = dto.technicianId || undefined;
+      if (to) await this.teamMembersService.assertActiveMember(businessId, to);
+      if (to !== amc.technicianId) {
+        technicianMove = { from: amc.technicianId, to };
+        amc.technicianId = to;
+      }
+    }
+
     if (dto.totalVisits !== undefined || dto.endDate || dto.startDate) {
       const completedList = (amc.visitSchedule || []).filter(
         (v) => v.status === 'completed',
@@ -816,6 +842,29 @@ export class AmcService {
     }
 
     const saved = await amc.save();
+    if (technicianMove) {
+      await this.serviceModel
+        .updateMany(
+          {
+            businessId: idFilter(businessId),
+            amcId: idFilter(amc._id.toString()),
+            status: 'pending',
+            // A visit the owner took on themself stays theirs.
+            assignedToOwner: { $ne: true },
+            $or: [
+              { assignedTechnicianId: { $exists: false } },
+              { assignedTechnicianId: null },
+              ...(technicianMove.from
+                ? [{ assignedTechnicianId: idFilter(technicianMove.from) }]
+                : []),
+            ],
+          },
+          technicianMove.to
+            ? { $set: { assignedTechnicianId: new Types.ObjectId(technicianMove.to) } }
+            : { $unset: { assignedTechnicianId: 1 } },
+        )
+        .exec();
+    }
     this.invalidateSync(businessId);
     return saved;
   }

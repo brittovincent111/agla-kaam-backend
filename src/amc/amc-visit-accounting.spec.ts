@@ -6,6 +6,7 @@ import { Amc } from './schemas/amc.schema';
 import { Service } from '../services/schemas/service.schema';
 import { CustomersService } from '../customers/customers.service';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
+import { TeamMembersService } from '../team-members/team-members.service';
 
 /**
  * Visit accounting for AMC contracts.
@@ -142,6 +143,10 @@ describe('AMC visit accounting', () => {
           provide: SubscriptionsService,
           useValue: { getActiveTier: jest.fn() },
         },
+        {
+          provide: TeamMembersService,
+          useValue: { assertActiveMember: jest.fn() },
+        },
       ],
     }).compile();
     return module.get<AmcService>(AmcService);
@@ -215,6 +220,66 @@ describe('AMC visit accounting', () => {
     });
   });
 
+  describe('contract technician', () => {
+    async function withUpdateMany(amc: any) {
+      await build(amc);
+      (serviceModel as any).updateMany = jest
+        .fn()
+        .mockReturnValue({ exec: jest.fn().mockResolvedValue({}) });
+      return (serviceModel as any).updateMany as jest.Mock;
+    }
+    const RAVI = new Types.ObjectId().toString();
+    const SURESH = new Types.ObjectId().toString();
+
+    it('setting one moves the raised visits that had no technician of their own', async () => {
+      const amc = makeAmc(4);
+      const updateMany = await withUpdateMany(amc);
+
+      await service.update(BUSINESS_ID, AMC_ID.toString(), { technicianId: RAVI });
+
+      expect(amc).toHaveProperty('technicianId', RAVI);
+      const [filter, update] = updateMany.mock.calls[0];
+      expect(filter.status).toBe('pending');
+      expect(filter.$or).toHaveLength(2); // no field, or null
+      expect(String(update.$set.assignedTechnicianId)).toBe(RAVI);
+    });
+
+    it('changing it also moves visits that were following the old one', async () => {
+      const amc: any = makeAmc(4);
+      amc.technicianId = RAVI;
+      const updateMany = await withUpdateMany(amc);
+
+      await service.update(BUSINESS_ID, AMC_ID.toString(), { technicianId: SURESH });
+
+      const [filter, update] = updateMany.mock.calls[0];
+      expect(filter.$or).toHaveLength(3);
+      expect(JSON.stringify(filter.$or[2])).toContain(RAVI);
+      expect(String(update.$set.assignedTechnicianId)).toBe(SURESH);
+    });
+
+    it('clearing it hands the visits back to the customer\'s usual technician', async () => {
+      const amc: any = makeAmc(4);
+      amc.technicianId = RAVI;
+      const updateMany = await withUpdateMany(amc);
+
+      await service.update(BUSINESS_ID, AMC_ID.toString(), { technicianId: '' });
+
+      expect(amc.technicianId).toBeUndefined();
+      expect(updateMany.mock.calls[0][1]).toEqual({ $unset: { assignedTechnicianId: 1 } });
+    });
+
+    it('saving other fields leaves the visits alone', async () => {
+      const amc: any = makeAmc(4);
+      amc.technicianId = RAVI;
+      const updateMany = await withUpdateMany(amc);
+
+      await service.update(BUSINESS_ID, AMC_ID.toString(), { notes: 'gate code 1234' });
+      await service.update(BUSINESS_ID, AMC_ID.toString(), { technicianId: RAVI });
+
+      expect(updateMany).not.toHaveBeenCalled();
+    });
+  });
+
   describe('syncAmcServices', () => {
     const createdDocs = () =>
       serviceModel.insertMany.mock.calls.flatMap((c: any[]) => c[0]);
@@ -236,6 +301,24 @@ describe('AMC visit accounting', () => {
       expect(created.nextServiceDate).toEqual(amc.visitSchedule[0].dueDate);
       expect(amc.visitSchedule[0].serviceId).toBeDefined();
       expect(serviceModel.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('gives the visit to the contract technician when the contract has one', async () => {
+      const amc = await build(makeAmc(4));
+      const tech = new Types.ObjectId().toString();
+      amc.technicianId = tech;
+
+      await service.syncAmcServices(BUSINESS_ID);
+
+      expect(String(createdDocs()[0].assignedTechnicianId)).toBe(tech);
+    });
+
+    it('leaves the visit to follow the customer when the contract has no technician', async () => {
+      await build(makeAmc(4));
+
+      await service.syncAmcServices(BUSINESS_ID);
+
+      expect(createdDocs()[0]).not.toHaveProperty('assignedTechnicianId');
     });
 
     it('does not raise a second service for a visit that already has one', async () => {

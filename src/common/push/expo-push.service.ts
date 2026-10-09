@@ -96,6 +96,8 @@ export class ExpoPushService {
           body: JSON.stringify(
             batch.map((message) => ({
               ...message,
+              // iOS is silent unless asked; Android takes it from the channel.
+              sound: 'default',
               channelId: ANDROID_CHANNEL_ID,
             })),
           ),

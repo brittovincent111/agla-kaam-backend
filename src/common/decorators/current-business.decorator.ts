@@ -14,6 +14,8 @@ export interface AuthenticatedBusiness {
   // Only set for a team member (technician or manager) — the TeamMember
   // row's own id, distinct from businessId (which is the owner's business).
   teamMemberId?: string;
+  // The owner's sign-in this request belongs to (absent on older logins).
+  sid?: string;
 }
 
 type Viewer = { role?: string; teamMemberId?: string } | undefined | null;

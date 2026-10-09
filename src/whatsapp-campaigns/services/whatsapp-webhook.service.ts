@@ -5,6 +5,7 @@ import { WhatsappRecipient, WhatsappRecipientDocument } from '../schemas/whatsap
 import { WhatsappMessage, WhatsappMessageDocument } from '../schemas/whatsapp-message.schema';
 import { Lead, LeadDocument } from '../../lead-finder/schemas/lead.schema';
 import { WhatsappQueueService } from './whatsapp-queue.service';
+import { WhatsappBotService } from './whatsapp-bot.service';
 
 // Replies that mean "stop" — the template's opt-out button in English and
 // Hindi, and the words people type.
@@ -34,6 +35,7 @@ export class WhatsappWebhookService {
     @InjectModel(WhatsappMessage.name) private readonly messageModel: Model<WhatsappMessageDocument>,
     @InjectModel(Lead.name) private readonly leadModel: Model<LeadDocument>,
     private readonly queue: WhatsappQueueService,
+    private readonly bot: WhatsappBotService,
   ) {}
 
   async handle(payload: any): Promise<void> {
@@ -124,24 +126,28 @@ export class WhatsappWebhookService {
     });
 
     const said = text.trim().toLowerCase();
+    const wasStop = STOP_WORDS.includes(said);
+    const wasYes = !wasStop && YES_WORDS.includes(said);
     if (recipient && !recipient.repliedAt) {
       recipient.repliedAt = at;
       recipient.replyText = text.slice(0, 500);
       await recipient.save();
     }
 
+    let leadDoc: LeadDocument | null = null;
     if (leadId) {
       const lead = await this.leadModel.findById(leadId).exec();
+      leadDoc = lead;
       if (lead) {
         lead.whatsappRepliedAt = at;
-        if (STOP_WORDS.includes(said)) {
+        if (wasStop) {
           lead.isWhatsappOptedOut = true;
           lead.whatsappOptedOutAt = at;
           if (recipient) {
             recipient.status = 'OPTED_OUT';
             await recipient.save();
           }
-        } else if (YES_WORDS.includes(said)) {
+        } else if (wasYes) {
           if (lead.status !== 'INSTALLED') lead.status = 'INTERESTED';
         } else if (['NEW', 'REVIEWED', 'CONTACTED'].includes(lead.status)) {
           lead.status = 'REPLIED';
@@ -149,6 +155,20 @@ export class WhatsappWebhookService {
         await lead.save();
       }
     }
+    // The automatic reply, after the lead is up to date. Never lets a
+    // failure there lose the message itself.
+    await this.bot
+      .onInbound({
+        phone,
+        lead: leadDoc,
+        recipient,
+        buttonId: m.interactive?.button_reply?.id ?? null,
+        text,
+        wasStop,
+        wasYes,
+      })
+      .catch((err) => this.logger.error(`Assistant failed for ${phone}: ${(err as Error).message}`));
+
     return recipient ? recipient.campaignId.toString() : null;
   }
 

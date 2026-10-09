@@ -7,6 +7,7 @@ import {
   IsOptional,
   IsString,
   Min,
+  ValidateIf,
 } from 'class-validator';
 
 export class CreateAmcDto {
@@ -42,4 +43,11 @@ export class CreateAmcDto {
   @IsString()
   @IsOptional()
   notes?: string;
+
+  // A team member's id, or '' (on edit) to go back to the customer's usual
+  // technician.
+  @IsOptional()
+  @ValidateIf((o: CreateAmcDto) => o.technicianId !== '')
+  @IsMongoId()
+  technicianId?: string;
 }

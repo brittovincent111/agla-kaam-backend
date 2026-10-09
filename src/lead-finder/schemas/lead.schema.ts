@@ -161,6 +161,17 @@ export class Lead {
   @Prop()
   installedAt?: Date;
 
+  // The WhatsApp assistant's progress with this lead. botPausedAt: a person
+  // took over (or a question it could not answer) — it stays quiet from then.
+  @Prop() whatsappBotPausedAt?: Date;
+  @Prop() whatsappBotWelcomedAt?: Date;
+  @Prop() whatsappLanguage?: string;
+  @Prop() whatsappClickedAt?: Date;
+  @Prop() callRequestedAt?: Date;
+  @Prop() whatsappNudgedAt?: Date;
+  @Prop() whatsappFollowUpAt?: Date;
+  @Prop() whatsappInstallWelcomedAt?: Date;
+
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Business' })
   installedBusinessId?: Types.ObjectId;
 

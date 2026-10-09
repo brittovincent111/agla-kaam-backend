@@ -349,3 +349,125 @@ describe('PurchasesService.create stock', () => {
     });
   });
 });
+
+describe('paying a supplier', () => {
+  const owing = (fields: Record<string, unknown> = {}) => {
+    const doc = makePurchaseDoc({ totalAmount: 12000, amountPaid: 0, balanceDue: 12000, paymentStatus: 'unpaid', payments: [], ...fields });
+    doc.save = jest.fn(async () => doc);
+    return build(doc);
+  };
+
+  it('records a part payment with its method and date, and keeps the rest owing', async () => {
+    const { service, doc } = owing();
+    await service.recordPayment(BIZ, PURCHASE, 5000, { method: 'upi', paidAt: '2026-10-09T10:00:00.000Z', note: 'first half' });
+    expect(doc.amountPaid).toBe(5000);
+    expect(doc.balanceDue).toBe(7000);
+    expect(doc.paymentStatus).toBe('partially_paid');
+    expect(doc.payments).toEqual([
+      { amount: 5000, method: 'upi', paidAt: new Date('2026-10-09T10:00:00.000Z'), note: 'first half' },
+    ]);
+  });
+
+  it('a second payment adds to the first and settles the bill', async () => {
+    const { service, doc } = owing({
+      amountPaid: 5000,
+      balanceDue: 7000,
+      paymentStatus: 'partially_paid',
+      payments: [{ amount: 5000, method: 'upi', paidAt: new Date('2026-10-09') }],
+    });
+    await service.recordPayment(BIZ, PURCHASE, 7000, { method: 'cash' });
+    expect(doc.amountPaid).toBe(12000);
+    expect(doc.balanceDue).toBe(0);
+    expect(doc.paymentStatus).toBe('paid');
+    expect(doc.payments).toHaveLength(2);
+    expect(doc.payments[1]).toMatchObject({ amount: 7000, method: 'cash' });
+  });
+
+  it('paying more than is owed only takes what is owed', async () => {
+    const { service, doc } = owing({ amountPaid: 10000, balanceDue: 2000, paymentStatus: 'partially_paid' });
+    await service.recordPayment(BIZ, PURCHASE, 5000);
+    expect(doc.amountPaid).toBe(12000);
+    expect(doc.payments[doc.payments.length - 1]).toMatchObject({ amount: 2000, method: 'cash' });
+  });
+
+  it('refuses a payment on a bill already paid in full', async () => {
+    const { service } = owing({ amountPaid: 12000, balanceDue: 0, paymentStatus: 'paid' });
+    await expect(service.recordPayment(BIZ, PURCHASE, 100)).rejects.toThrow('already fully paid');
+  });
+
+  it('older bills without a payment list still take payments', async () => {
+    const { service, doc } = owing({ payments: undefined });
+    await service.recordPayment(BIZ, PURCHASE, 100);
+    expect(doc.payments).toHaveLength(1);
+  });
+
+  it('404s on a bad id', async () => {
+    const { service } = owing();
+    await expect(service.recordPayment(BIZ, 'nope', 100)).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+describe('a payment made at the counter', () => {
+  function creating() {
+    const { purchaseModel, inventoryService } = build();
+    purchaseModel.mockImplementation((data: any) => ({ ...data, save: jest.fn().mockResolvedValue(data) }));
+    const businessesService = {
+      findById: jest.fn().mockResolvedValue({ purchasePrefix: 'PO-', purchaseNextSerial: 8 }),
+      update: jest.fn().mockResolvedValue({}),
+    };
+    return new PurchasesService(purchaseModel, inventoryService as any, businessesService as any);
+  }
+  const line = [{ itemId: FILTER_ID, name: 'RO Filter', quantity: 10, costPrice: 100 }];
+
+  it('becomes the first payment of the bill', async () => {
+    const created: any = await creating().create(BIZ, {
+      supplierName: 'Metro Spares',
+      paymentStatus: 'partially_paid',
+      amountPaid: 400,
+      paymentMethod: 'upi',
+      purchaseDate: '2026-10-01T00:00:00.000Z',
+      items: line,
+    } as any);
+    expect(created.payments).toEqual([
+      { amount: 400, method: 'upi', paidAt: new Date('2026-10-01T00:00:00.000Z'), note: 'At purchase' },
+    ]);
+  });
+
+  it('a bill bought on credit starts with no payments', async () => {
+    const created: any = await creating().create(BIZ, {
+      supplierName: 'Metro Spares',
+      paymentStatus: 'unpaid',
+      paymentMethod: 'credit',
+      items: line,
+    } as any);
+    expect(created.payments).toEqual([]);
+    expect(created.balanceDue).toBe(1000);
+  });
+});
+
+describe("a supplier's unpaid bills", () => {
+  const SUPPLIER = '507f1f77bcf86cd799439031';
+
+  it('lists what is owed, oldest first, with the total — matching old bills by name', async () => {
+    const { service, purchaseModel } = build();
+    const rows = [
+      { _id: new Types.ObjectId(), purchaseNumber: 'PO-1', purchaseDate: new Date('2026-09-01'), totalAmount: 5000, balanceDue: 2000, currency: 'INR' },
+      { _id: new Types.ObjectId(), purchaseNumber: 'PO-2', purchaseDate: new Date('2026-09-20'), totalAmount: 3000, balanceDue: 3000, currency: 'INR' },
+    ];
+    const chain: any = { sort: () => chain, limit: () => chain, select: () => chain, lean: () => chain, exec: async () => rows };
+    purchaseModel.find = jest.fn(() => chain);
+
+    const result = await service.unpaidForSupplier(BIZ, SUPPLIER, 'Metro Spares');
+
+    expect(result.outstanding).toBe(5000);
+    expect(result.bills.map((b) => b.purchaseNumber)).toEqual(['PO-1', 'PO-2']);
+    const filter = purchaseModel.find.mock.calls[0][0];
+    expect(filter.balanceDue).toEqual({ $gt: 0 });
+    expect(filter.$or[1]).toEqual({ supplierId: { $exists: false }, supplierName: 'Metro Spares' });
+  });
+
+  it('a bad supplier id owes nothing', async () => {
+    const { service } = build();
+    await expect(service.unpaidForSupplier(BIZ, 'x')).resolves.toEqual({ outstanding: 0, bills: [] });
+  });
+});

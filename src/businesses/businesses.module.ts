@@ -48,11 +48,18 @@ import {
   PlayPurchase,
   PlayPurchaseSchema,
 } from '../subscriptions/schemas/play-purchase.schema';
+import {
+  QuickNote,
+  QuickNoteSchema,
+} from '../quick-notes/schemas/quick-note.schema';
 import { ServicePresetsModule } from '../service-presets/service-presets.module';
 import { BusinessesService } from './businesses.service';
 import { BusinessesController } from './businesses.controller';
 import { S3Service } from '../common/s3/s3.service';
 import { AppleSignInService } from '../common/apple/apple-sign-in.service';
+
+import { OwnerSessionsService } from './owner-sessions.service';
+import { ExpoPushService } from '../common/push/expo-push.service';
 
 @Module({
   imports: [
@@ -82,11 +89,18 @@ import { AppleSignInService } from '../common/apple/apple-sign-in.service';
       { name: Supplier.name, schema: SupplierSchema },
       { name: ApplePurchase.name, schema: ApplePurchaseSchema },
       { name: PlayPurchase.name, schema: PlayPurchaseSchema },
+      { name: QuickNote.name, schema: QuickNoteSchema },
     ]),
     ServicePresetsModule,
   ],
   controllers: [BusinessesController],
-  providers: [BusinessesService, S3Service, AppleSignInService],
-  exports: [BusinessesService],
+  providers: [
+    BusinessesService,
+    S3Service,
+    AppleSignInService,
+    OwnerSessionsService,
+    ExpoPushService,
+  ],
+  exports: [BusinessesService, OwnerSessionsService],
 })
 export class BusinessesModule {}

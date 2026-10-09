@@ -466,8 +466,10 @@ export class RemindersService {
     const now = new Date();
 
     const businesses = await this.businessModel
-      .find({ pushToken: { $exists: true, $ne: '' } })
-      .select('_id name pushToken timezone')
+      .find({
+        $or: [{ pushToken: { $exists: true, $ne: '' } }, { 'pushTokens.0': { $exists: true } }],
+      })
+      .select('_id name pushToken pushTokens timezone')
       .exec();
 
     // Only the businesses whose local morning it is right now.
@@ -481,14 +483,17 @@ export class RemindersService {
     for (const business of dueNow) {
       const businessId = business.id as string;
 
-      // Owner: everything due across the whole business.
-      const ownerDue = await this.dueToday(
-        businessId,
-        undefined,
-        business.timezone,
-      );
-      if (ownerDue.length && business.pushToken) {
-        messages.push(this.buildDuePush(business.pushToken, ownerDue.length));
+      // Owner: everything due and overdue across the whole business, on
+      // every phone they are signed in on.
+      const [ownerToday, ownerOverdue] = await Promise.all([
+        this.dueToday(businessId, undefined, business.timezone),
+        this.overdue(businessId, undefined, business.timezone),
+      ]);
+      const ownerPush = buildMorningPush(ownerToday.length, ownerOverdue.length);
+      if (ownerPush) {
+        for (const token of this.businessesService.ownerPushTokens(business)) {
+          messages.push({ to: token, ...ownerPush });
+        }
       }
 
       // Technicians: only what is actually assigned to them. Without the
@@ -498,20 +503,17 @@ export class RemindersService {
         await this.teamMembersService.findNotifiableForBusiness(businessId);
       for (const technician of technicians) {
         if (!technician.pushToken) continue;
-        const theirDue = await this.dueToday(
+        const viewer = {
           businessId,
-          {
-            businessId,
-            role: technician.role === 'manager' ? 'manager' : 'technician',
-            teamMemberId: technician.id as string,
-          },
-          business.timezone,
-        );
-        if (theirDue.length) {
-          messages.push(
-            this.buildDuePush(technician.pushToken, theirDue.length),
-          );
-        }
+          role: technician.role === 'manager' ? 'manager' : 'technician',
+          teamMemberId: technician.id as string,
+        } as AuthenticatedBusiness;
+        const [theirToday, theirOverdue] = await Promise.all([
+          this.dueToday(businessId, viewer, business.timezone),
+          this.overdue(businessId, viewer, business.timezone),
+        ]);
+        const push = buildMorningPush(theirToday.length, theirOverdue.length);
+        if (push) messages.push({ to: technician.pushToken, ...push });
       }
     }
 
@@ -532,16 +534,34 @@ export class RemindersService {
     }
   }
 
-  private buildDuePush(token: string, dueCount: number): PushMessage {
-    const plural = dueCount === 1 ? 'service' : 'services';
-    return {
-      to: token,
-      title: `${dueCount} ${plural} due today`,
-      body:
-        dueCount === 1
+}
+
+/**
+ * The 8 AM push: what is due today and what is overdue, one line each way.
+ * Tapping it opens the list that matters most — overdue first. Nothing due
+ * and nothing overdue: no push at all.
+ */
+export function buildMorningPush(
+  today: number,
+  overdue: number,
+): Omit<PushMessage, 'to'> | null {
+  if (!today && !overdue) return null;
+  const services = (n: number) => `${n} service${n === 1 ? '' : 's'}`;
+  const title =
+    today && overdue
+      ? `${services(today)} due today · ${overdue} overdue`
+      : today
+        ? `${services(today)} due today`
+        : `${services(overdue)} overdue`;
+  const body =
+    today && overdue
+      ? `Start with the ${overdue} overdue — tap to see who.`
+      : today
+        ? today === 1
           ? 'One customer is due for service today. Tap to see who.'
-          : `${dueCount} customers are due for service today. Tap to see who.`,
-      data: { screen: 'Reminders' },
-    };
-  }
+          : `${today} customers are due for service today. Tap to see who.`
+        : overdue === 1
+          ? 'One customer is past their service date. Tap to remind them.'
+          : `${overdue} customers are past their service date. Tap to remind them.`;
+  return { title, body, data: { screen: 'Services', filter: overdue ? 'overdue' : 'today' } };
 }
