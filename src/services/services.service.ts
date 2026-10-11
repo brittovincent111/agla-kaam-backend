@@ -706,6 +706,14 @@ export class ServicesService {
           : 'A cancelled job cannot be revisited.',
       );
     }
+    // Nobody has been yet: there is nothing to come back to. An unbooked job
+    // is booked for the day the customer agrees — revisiting it counted a
+    // "2nd visit" that never happened and still left it off every day.
+    if (!service.booked) {
+      throw new BadRequestException(
+        'This visit has not been booked yet. Book it for the day the customer agrees.',
+      );
+    }
     const revisitDate = new Date(revisitDateStr);
     if (Number.isNaN(revisitDate.getTime())) {
       throw new BadRequestException('Choose a date for the revisit.');
@@ -727,6 +735,8 @@ export class ServicesService {
     service.serviceDate = revisitDate;
     this.rederiveFromDate(service, revisitDate);
     service.lastRemindedAt = undefined;
+    // The first visit's time slot was agreed for that day, not this one.
+    service.visitSlot = undefined;
     if (service.amcId) {
       await this.amcService.moveVisit(
         businessId,
@@ -805,11 +815,14 @@ export class ServicesService {
       { _id?: unknown } | undefined;
     const reason = dto.notes?.trim();
 
-    return this.serviceModel.create({
+    const callback = await this.serviceModel.create({
       businessId,
       customerId: original.customerId,
       serviceType: original.serviceType,
       status: 'pending',
+      // The customer called and a day was agreed: it is booked, so it is on
+      // the technician's day and Team day, not waiting under "To book".
+      booked: true,
       serviceDate: date,
       warrantyPeriod: 'none',
       warrantyExpiry: null,
@@ -826,6 +839,14 @@ export class ServicesService {
       callbackOf: original._id,
       underWarranty,
     });
+
+    this.jobPush?.notifyNewJobs(
+      businessId,
+      await this.jobHolder(businessId, callback),
+      [callback._id.toString()],
+      viewer.teamMemberId,
+    );
+    return callback;
   }
 
   // The callbacks raised against a job, newest first — for the original's

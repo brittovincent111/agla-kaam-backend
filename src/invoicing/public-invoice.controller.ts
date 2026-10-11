@@ -34,6 +34,7 @@ export const PUBLIC_PAGE_CSP =
 // No auth guard on purpose: these open from a payment reminder. Access is
 // the signed, expiring token in the path (see InvoiceShareService) — it names
 // exactly one invoice.
+import { documentPhone } from '../common/utils/document-phone';
 @Controller('public/invoices')
 export class PublicInvoiceController {
   constructor(
@@ -63,7 +64,14 @@ export class PublicInvoiceController {
     ) {
       throw new NotFoundException('This invoice link has expired');
     }
-    return { target, invoice, biz };
+    // Customers see the number the owner chose for documents. A plain copy,
+    // so nothing here can write it back to the business.
+    const shown = biz.toObject ? biz.toObject() : biz;
+    return {
+      target,
+      invoice,
+      biz: { ...shown, phone: documentPhone(shown) } as typeof biz,
+    };
   }
 
   // What is owed and how to pay it. Shared by the HTML page and the

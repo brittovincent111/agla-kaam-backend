@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { Purchase, PurchaseSchema } from './schemas/purchase.schema';
+import { Supplier, SupplierSchema } from '../suppliers/schemas/supplier.schema';
 import { PurchasesService } from './purchases.service';
 import { PurchasesController } from './purchases.controller';
 import { PurchasePdfService } from './purchase-pdf.service';
@@ -12,6 +13,8 @@ import { BusinessesModule } from '../businesses/businesses.module';
   imports: [
     MongooseModule.forFeature([
       { name: Purchase.name, schema: PurchaseSchema },
+      // Read-only: the PO prints the supplier's current address.
+      { name: Supplier.name, schema: SupplierSchema },
     ]),
     InventoryModule,
     BusinessesModule,

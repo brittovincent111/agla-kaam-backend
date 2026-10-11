@@ -41,6 +41,12 @@ export class Business {
   @Prop({ unique: true, sparse: true, index: true })
   phone?: string;
 
+  // The number printed on invoices, quotations and the customer's shared
+  // pages, when it should differ from the registered phone above (which also
+  // signs the owner in). Unset = the registered phone.
+  @Prop({ trim: true })
+  documentPhone?: string;
+
   @Prop({
     required: true,
     default: 'free',
@@ -291,6 +297,11 @@ export class Business {
   @Prop({ default: true })
   invoiceShowTax?: boolean;
 
+  // The PAID / UNPAID (or DRAFT / SENT) badge on the PDF. CANCELLED always
+  // prints regardless.
+  @Prop({ default: true })
+  invoiceShowStatus?: boolean;
+
   @Prop({ default: true })
   invoiceShowHsn?: boolean;
 
@@ -315,6 +326,11 @@ export class Business {
 
   @Prop({ default: true })
   quotationShowTax?: boolean;
+
+  // The PAID / UNPAID (or DRAFT / SENT) badge on the PDF. CANCELLED always
+  // prints regardless.
+  @Prop({ default: true })
+  quotationShowStatus?: boolean;
 
   @Prop({ default: true })
   quotationShowHsn?: boolean;
@@ -357,6 +373,11 @@ export class Business {
   @Prop({ default: true })
   purchaseShowTax?: boolean;
 
+  // The PAID / UNPAID (or DRAFT / SENT) badge on the PDF. CANCELLED always
+  // prints regardless.
+  @Prop({ default: true })
+  purchaseShowStatus?: boolean;
+
   @Prop({ default: true })
   purchaseShowHsn?: boolean;
 
@@ -389,6 +410,11 @@ export class Business {
 
   @Prop({ default: true })
   proformaShowTax?: boolean;
+
+  // The PAID / UNPAID (or DRAFT / SENT) badge on the PDF. CANCELLED always
+  // prints regardless.
+  @Prop({ default: true })
+  proformaShowStatus?: boolean;
 
   @Prop({ default: true })
   proformaShowHsn?: boolean;

@@ -1,4 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model, Types } from 'mongoose';
+import { Supplier, SupplierDocument } from '../suppliers/schemas/supplier.schema';
+import { idFilter } from '../common/utils/id-match';
 import * as QRCode from 'qrcode';
 import { BusinessesService } from '../businesses/businesses.service';
 import { Purchase } from './schemas/purchase.schema';
@@ -43,6 +47,7 @@ type PurchaseRenderBusiness = RenderBusiness & {
   purchaseShowBankInfo?: boolean;
   purchaseBottomMessage?: string;
   purchaseShowHsn?: boolean;
+  purchaseShowStatus?: boolean;
 };
 
 // A purchase record turned into the same DocumentSpec the invoice, quotation
@@ -51,7 +56,32 @@ type PurchaseRenderBusiness = RenderBusiness & {
 // addressed to the SUPPLIER, so the supplier fills the customer slot.
 @Injectable()
 export class PurchasePdfService {
-  constructor(private readonly businessesService: BusinessesService) {}
+  constructor(
+    private readonly businessesService: BusinessesService,
+    @Optional()
+    @InjectModel(Supplier.name)
+    private readonly supplierModel?: Model<SupplierDocument>,
+  ) {}
+
+  /**
+   * The supplier's address as it is now. A purchase keeps only the
+   * supplier's name and phone, so without this the PO printed no address.
+   */
+  private async supplierAddress(
+    businessId: string,
+    supplierId?: unknown,
+  ): Promise<string | undefined> {
+    if (!this.supplierModel || !supplierId) return undefined;
+    const id = String(supplierId);
+    if (!Types.ObjectId.isValid(id)) return undefined;
+    const supplier = await this.supplierModel
+      .findOne({ _id: id, businessId: idFilter(businessId) })
+      .select('address')
+      .lean()
+      .exec()
+      .catch(() => null);
+    return supplier?.address?.trim() || undefined;
+  }
 
   async generate(
     businessId: string,
@@ -86,6 +116,7 @@ export class PurchasePdfService {
       templateId,
       accentColor,
       geometry,
+      await this.supplierAddress(businessId, purchase.supplierId),
     );
   }
 
@@ -97,6 +128,7 @@ export class PurchasePdfService {
     templateId?: DocumentTemplateId,
     accentColor?: string | null,
     geometry: PageGeometry = A4,
+    supplierAddress?: string,
   ): Promise<Buffer> {
     const theme = resolveDocumentTheme(templateId, accentColor);
     const currency = purchase.currency || business.currency || 'INR';
@@ -107,6 +139,7 @@ export class PurchasePdfService {
     const supplier: RenderCustomer = {
       name: purchase.supplierName,
       phone: purchase.supplierPhone ?? '',
+      address: supplierAddress,
     };
 
     const metaRows = [
@@ -156,6 +189,7 @@ export class PurchasePdfService {
       senderLabel: 'BILL TO',
       recipientLabel: 'BILL FROM',
       status: STATUS_LABELS[purchase.paymentStatus] ?? STATUS_LABELS.unpaid,
+      hideStatus: business.purchaseShowStatus === false,
       metaRows,
       items,
       totals,

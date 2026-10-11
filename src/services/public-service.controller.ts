@@ -38,6 +38,7 @@ import { S3Service } from '../common/s3/s3.service';
  *
  * No auth guard: access is the signed token in the path, naming one job.
  */
+import { documentPhone } from '../common/utils/document-phone';
 @Controller('public/services')
 export class PublicServiceController {
   constructor(
@@ -76,7 +77,7 @@ export class PublicServiceController {
         .catch(() => null),
       this.businessModel
         .findById(target.businessId)
-        .select('name phone googleReviewUrl hasLogo')
+        .select('name phone documentPhone googleReviewUrl hasLogo')
         .lean()
         .exec(),
       this.serviceModel
@@ -94,7 +95,14 @@ export class PublicServiceController {
     ]);
     if (!biz)
       throw new NotFoundException('This service record link has expired');
-    return { target, service, customer, biz, history };
+    // Customers see the number the owner chose for documents.
+    return {
+      target,
+      service,
+      customer,
+      biz: { ...biz, phone: documentPhone(biz) },
+      history,
+    };
   }
 
   // The WhatsApp text behind "Book my next service", not yet URL-encoded.

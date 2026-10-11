@@ -60,6 +60,7 @@ function requestBase(req: Request): string {
   return host ? `${proto}://${host}` : '';
 }
 
+import { documentPhone } from '../common/utils/document-phone';
 @UseGuards(JwtAuthGuard)
 @Controller('reminders')
 export class RemindersController {
@@ -258,8 +259,9 @@ export class RemindersController {
               ? 'कोई नहीं'
               : 'None'
             : date(service.nextServiceDate),
-        businessContact: businessDoc.phone
-          ? `${businessDoc.name} — ${businessDoc.phone}`
+        // The number the owner chose for customers to see.
+        businessContact: documentPhone(businessDoc)
+          ? `${businessDoc.name} — ${documentPhone(businessDoc)}`
           : businessDoc.name,
         reviewLine,
         invoiceLine: await this.invoiceLineFor(

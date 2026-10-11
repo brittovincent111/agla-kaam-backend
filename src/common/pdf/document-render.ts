@@ -136,6 +136,8 @@ export interface DocumentSpec {
   // bills the business.
   senderLabel?: string;
   status: RenderStatus;
+  // The owner turned the status badge off for this kind of document.
+  hideStatus?: boolean;
   metaRows: { label: string; value: string }[];
   items: RenderItem[];
   totals: RenderTotalRow[];
@@ -829,6 +831,14 @@ export function drawLogoBadge(
     });
 }
 
+/**
+ * Whether the status badge is left off. CANCELLED always shows, whatever the
+ * setting: a cancelled document must never pass for a live one.
+ */
+export function statusHidden(spec: { hideStatus?: boolean; status: RenderStatus }): boolean {
+  return !!spec.hideStatus && spec.status.label !== 'CANCELLED';
+}
+
 export function drawStatusPill(
   ctx: Ctx,
   rightEdge: number,
@@ -836,6 +846,7 @@ export function drawStatusPill(
   scale = 1,
 ): number {
   const { doc, colors, spec } = ctx;
+  if (statusHidden(spec)) return rightEdge;
   const style = statusStyle(spec.status.tone, colors);
   doc.font('Helvetica-Bold').fontSize(8 * scale);
   const textWidth = doc.widthOfString(spec.status.label, {

@@ -11,6 +11,8 @@ function makeService(overrides: Record<string, unknown> = {}) {
     nextServiceInterval: '6m',
     nextServiceDate: new Date('2027-04-01T00:00:00Z'),
     revisitCount: 0,
+    // A revisit is a return trip, so the visit had been booked.
+    booked: true,
     ...overrides,
   };
   doc.save = jest.fn(async () => doc);
@@ -172,6 +174,65 @@ describe('callback', () => {
         {} as any,
       ),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+});
+
+describe('revisit needs a visit that was booked', () => {
+  it('refuses a job nobody was booked for, and leaves it as it was', async () => {
+    const doc = makeService({ booked: false });
+    await expect(
+      serviceWith(doc).revisitService('b', 's', inDays(3).toISOString(), {} as any),
+    ).rejects.toThrow('has not been booked yet');
+    expect(doc.revisitCount).toBe(0);
+    expect(doc.save).not.toHaveBeenCalled();
+  });
+
+  it('refuses an old job from before booking existed (no flag)', async () => {
+    const doc = makeService({ booked: undefined });
+    await expect(
+      serviceWith(doc).revisitService('b', 's', inDays(3).toISOString(), {} as any),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("drops the first visit's time slot", async () => {
+    const doc = makeService({ visitSlot: 'morning' });
+    await serviceWith(doc).revisitService('b', 's', inDays(2).toISOString(), {} as any);
+    expect(doc.visitSlot).toBeUndefined();
+  });
+
+  it('still moves an AMC contract visit with the job', async () => {
+    const doc = makeService({ amcId: 'amc1', _id: 'job1' });
+    const svc = serviceWith(doc);
+    const moveVisit = jest.fn();
+    (svc as any).amcService = { moveVisit };
+    const target = inDays(4);
+    await svc.revisitService('b', 'job1', target.toISOString(), {} as any);
+    expect(moveVisit).toHaveBeenCalledWith('b', 'amc1', 'job1', target);
+  });
+});
+
+describe('callback booking', () => {
+  it("is booked, so it is on the technician's day, and tells the technician", async () => {
+    const original = makeService({
+      _id: 'orig1',
+      status: 'completed',
+      warrantyExpiry: inDays(30),
+      assignedTechnicianId: 'tech1',
+    });
+    const svc = serviceWith(original);
+    (svc as any).serviceModel = {
+      create: jest.fn(async (row: any) => ({ ...row, _id: 'cb9' })),
+    };
+    const notifyNewJobs = jest.fn();
+    (svc as any).jobPush = { notifyNewJobs };
+    const row: any = await svc.createCallback(
+      'b',
+      'orig1',
+      { date: inDays(2).toISOString() },
+      { teamMemberId: undefined } as any,
+    );
+    expect(row.booked).toBe(true);
+    expect(notifyNewJobs).toHaveBeenCalledWith('b', 'tech1', ['cb9'], undefined);
   });
 });
 

@@ -43,6 +43,7 @@ const STATUS_LABELS: Record<string, RenderStatus> = {
 type QuotationRenderBusiness = RenderBusiness & {
   quotationTopMessage?: string;
   quotationShowTax?: boolean;
+  quotationShowStatus?: boolean;
   quotationShowBankInfo?: boolean;
   quotationShowUpiInfo?: boolean;
   quotationShowSignature?: boolean;
@@ -157,6 +158,7 @@ export class QuotationPdfService {
       numberLabel: 'Quotation No.',
       recipientLabel: 'BILL TO',
       status: STATUS_LABELS[quotation.status] ?? STATUS_LABELS.draft,
+      hideStatus: business.quotationShowStatus === false,
       metaRows,
       items: toRenderItems(quotation.items),
       totals,

@@ -37,6 +37,7 @@ type ProformaRenderBusiness = RenderBusiness & {
   proformaTopMessage?: string;
   proformaShowDiscount?: boolean;
   proformaShowTax?: boolean;
+  proformaShowStatus?: boolean;
   proformaShowBankInfo?: boolean;
   proformaShowUpiInfo?: boolean;
   proformaBottomMessage?: string;
@@ -137,6 +138,7 @@ export class ProformaPdfService {
       numberLabel: 'Proforma No.',
       recipientLabel: 'BILL TO',
       status: STATUS_LABELS[proforma.status] ?? STATUS_LABELS.draft,
+      hideStatus: business.proformaShowStatus === false,
       metaRows,
       items: toRenderItems(proforma.items),
       totals,

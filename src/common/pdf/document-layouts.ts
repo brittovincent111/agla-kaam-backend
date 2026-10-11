@@ -350,7 +350,13 @@ const classic: LayoutDefinition = {
       .fontSize(20)
       .fillColor(colors.text)
       .text(spec.title, x, y, { characterSpacing: 0.5 });
-    drawStatusPill(ctx, x + 190, y + 4, 0.9);
+    // Just after the title, however long it is: at a fixed x+190 it sat on
+    // top of "PURCHASE ORDER" and "PROFORMA INVOICE".
+    const titleW = doc.widthOfString(spec.title, { characterSpacing: 0.5 });
+    doc.font('Helvetica-Bold').fontSize(8 * 0.9);
+    const pillW =
+      doc.widthOfString(spec.status.label, { characterSpacing: 0.5 }) + 22 * 0.9;
+    drawStatusPill(ctx, Math.max(x + 190, x + titleW + 12 + pillW), y + 4, 0.9);
 
     const metaW = 186;
     const metaX = geo.width - geo.margin - metaW;
@@ -1157,9 +1163,14 @@ const compact: LayoutDefinition = {
     const cells: { label: string; lines: string[] }[] = [
       {
         label: spec.senderLabel ?? 'BILL FROM',
-        lines: [business.name, business.phone, businessTaxId(business)].filter(
-          Boolean,
-        ) as string[],
+        // The address too, in the same order as Bill To: Compact's header
+        // carries no address, so leaving it out here printed it nowhere.
+        lines: [
+          business.name,
+          business.phone,
+          business.address,
+          businessTaxId(business),
+        ].filter(Boolean) as string[],
       },
       {
         label: spec.recipientLabel,

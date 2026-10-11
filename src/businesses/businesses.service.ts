@@ -81,6 +81,7 @@ import {
   geoDefaultsForCountry,
 } from '../common/utils/geo-defaults';
 import { splitClearableUpdate } from '../common/utils/clearable-update';
+import { documentPhone } from '../common/utils/document-phone';
 import { idFilter } from '../common/utils/id-match';
 import { escapeRegex } from '../common/pagination/cursor-page';
 
@@ -121,11 +122,13 @@ export interface BusinessWithBranding {
   // setting look like it does nothing.
   invoiceShowDiscount?: boolean;
   invoiceShowTax?: boolean;
+  invoiceShowStatus?: boolean;
   invoiceShowHsn?: boolean;
   invoiceShowBankInfo?: boolean;
   invoiceShowUpiInfo?: boolean;
   invoiceBottomMessage?: string;
   quotationShowTax?: boolean;
+  quotationShowStatus?: boolean;
   quotationShowHsn?: boolean;
   quotationShowBankInfo?: boolean;
   quotationShowUpiInfo?: boolean;
@@ -133,10 +136,12 @@ export interface BusinessWithBranding {
   quotationBottomMessage?: string;
   proformaShowDiscount?: boolean;
   proformaShowTax?: boolean;
+  proformaShowStatus?: boolean;
   proformaShowHsn?: boolean;
   proformaShowBankInfo?: boolean;
   proformaShowUpiInfo?: boolean;
   proformaBottomMessage?: string;
+  purchaseShowStatus?: boolean;
   purchaseShowHsn?: boolean;
   purchaseShowBankInfo?: boolean;
   purchaseBottomMessage?: string;
@@ -508,7 +513,7 @@ export class BusinessesService implements OnModuleInit {
       name: business.name,
       tradeType: business.tradeType,
       address: business.address,
-      phone: business.phone,
+      phone: documentPhone(business),
       email: business.email,
       gstin: business.gstin,
       country: business.country,
@@ -528,11 +533,13 @@ export class BusinessesService implements OnModuleInit {
       showPaymentDetailsOnInvoice: business.showPaymentDetailsOnInvoice,
       invoiceShowDiscount: business.invoiceShowDiscount,
       invoiceShowTax: business.invoiceShowTax,
+      invoiceShowStatus: business.invoiceShowStatus,
       invoiceShowHsn: business.invoiceShowHsn,
       invoiceShowBankInfo: business.invoiceShowBankInfo,
       invoiceShowUpiInfo: business.invoiceShowUpiInfo,
       invoiceBottomMessage: business.invoiceBottomMessage,
       quotationShowTax: business.quotationShowTax,
+      quotationShowStatus: business.quotationShowStatus,
       quotationShowHsn: business.quotationShowHsn,
       quotationShowBankInfo: business.quotationShowBankInfo,
       quotationShowUpiInfo: business.quotationShowUpiInfo,
@@ -540,11 +547,13 @@ export class BusinessesService implements OnModuleInit {
       quotationBottomMessage: business.quotationBottomMessage,
       proformaShowDiscount: business.proformaShowDiscount,
       proformaShowTax: business.proformaShowTax,
+      proformaShowStatus: business.proformaShowStatus,
       proformaShowHsn: business.proformaShowHsn,
       proformaShowBankInfo: business.proformaShowBankInfo,
       proformaShowUpiInfo: business.proformaShowUpiInfo,
       proformaBottomMessage: business.proformaBottomMessage,
       purchaseShowHsn: business.purchaseShowHsn,
+      purchaseShowStatus: business.purchaseShowStatus,
       purchaseShowBankInfo: business.purchaseShowBankInfo,
       purchaseBottomMessage: business.purchaseBottomMessage,
       invoiceTopMessage: business.invoiceTopMessage,
@@ -557,10 +566,22 @@ export class BusinessesService implements OnModuleInit {
 
   async findByIdWithUsage(id: string) {
     // Independent reads, so run together. A missing business still 404s.
-    const [business, customerCount] = await Promise.all([
-      this.findById(id),
-      this.customerModel.countDocuments({ businessId: idFilter(id) }).exec(),
-    ]);
+    const [business, customerCount, hasService, hasPricedPreset, hasSentReminder] =
+      await Promise.all([
+        this.findById(id),
+        this.customerModel.countDocuments({ businessId: idFilter(id) }).exec(),
+        // The app's setup checklist: "does any exist", not counts, so each
+        // stops at the first match.
+        this.serviceModel.exists({ businessId: idFilter(id) }).exec(),
+        // Starter presets come without a price, so only one the owner priced
+        // counts as "set your prices".
+        this.servicePresetModel
+          .exists({ businessId: idFilter(id), defaultPrice: { $gt: 0 } })
+          .exec(),
+        this.serviceModel
+          .exists({ businessId: idFilter(id), lastRemindedAt: { $exists: true } })
+          .exec(),
+      ]);
     const freeTierLimit = Number(
       this.configService.get('FREE_TIER_CUSTOMER_LIMIT') ?? 25,
     );
@@ -570,6 +591,11 @@ export class BusinessesService implements OnModuleInit {
       ...business.toObject(),
       customerCount,
       freeTierLimit,
+      setup: {
+        hasService: !!hasService,
+        hasPricedPreset: !!hasPricedPreset,
+        hasSentReminder: !!hasSentReminder,
+      },
       geo: geoDefaultsForCountry(business.country),
     };
   }

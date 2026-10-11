@@ -8,6 +8,7 @@ export const CLEARABLE_TEXT_FIELDS = [
   'paymentBankName',
   'paymentAccountNumber',
   'paymentAccountCode',
+  'documentPhone',
 ] as const;
 
 export interface ClearableUpdate {

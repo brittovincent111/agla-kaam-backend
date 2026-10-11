@@ -50,6 +50,7 @@ type InvoiceRenderBusiness = RenderBusiness & {
   invoiceTopMessage?: string;
   invoiceShowDiscount?: boolean;
   invoiceShowTax?: boolean;
+  invoiceShowStatus?: boolean;
   invoiceShowBankInfo?: boolean;
   invoiceShowUpiInfo?: boolean;
   invoiceBottomMessage?: string;
@@ -285,6 +286,7 @@ export class InvoicePdfService {
       numberLabel: 'Invoice No.',
       recipientLabel: 'BILL TO',
       status: STATUS_LABELS[invoice.status] ?? STATUS_LABELS.draft,
+      hideStatus: business.invoiceShowStatus === false,
       metaRows,
       items: toRenderItems(invoice.items),
       totals,

@@ -45,6 +45,12 @@ export class UpdateBusinessDto {
   @MaxLength(20)
   phone?: string;
 
+  // Printed on documents instead of the registered phone. Empty clears it.
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  documentPhone?: string;
+
   @IsOptional()
   @IsString()
   @MaxLength(15)
@@ -176,6 +182,10 @@ export class UpdateBusinessDto {
 
   @IsOptional()
   @IsBoolean()
+  invoiceShowStatus?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
   invoiceShowHsn?: boolean;
 
   @IsOptional()
@@ -210,6 +220,10 @@ export class UpdateBusinessDto {
   @IsOptional()
   @IsBoolean()
   quotationShowTax?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  quotationShowStatus?: boolean;
 
   @IsOptional()
   @IsBoolean()
@@ -262,6 +276,10 @@ export class UpdateBusinessDto {
 
   @IsOptional()
   @IsBoolean()
+  purchaseShowStatus?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
   purchaseShowHsn?: boolean;
 
   @IsOptional()
@@ -296,6 +314,10 @@ export class UpdateBusinessDto {
   @IsOptional()
   @IsBoolean()
   proformaShowTax?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  proformaShowStatus?: boolean;
 
   @IsOptional()
   @IsBoolean()

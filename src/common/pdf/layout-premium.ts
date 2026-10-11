@@ -24,6 +24,7 @@ import {
   taxIdLabel,
   taxSummary,
   taxTypeName,
+  statusHidden,
 } from './document-render';
 import { amountInWords } from './amount-in-words';
 import { gstStateCode } from './place-of-supply';
@@ -183,6 +184,7 @@ function drawMasthead(ctx: Ctx): number {
 // The status, as a solid pill that reads on any brand colour.
 function drawBandPill(ctx: Ctx, rightEdge: number, y: number): void {
   const { doc, colors, spec } = ctx;
+  if (statusHidden(spec)) return;
   const style = statusStyle(spec.status.tone, colors);
   doc.font('Helvetica-Bold').fontSize(7.5);
   const w =
@@ -988,7 +990,7 @@ const STAMPED = new Set(['DRAFT', 'PAID', 'CANCELLED']);
 
 function drawStamp(ctx: Ctx): void {
   const { doc, colors, geo, spec } = ctx;
-  if (!STAMPED.has(spec.status.label)) return;
+  if (statusHidden(spec) || !STAMPED.has(spec.status.label)) return;
   const ink =
     spec.status.tone === 'positive'
       ? colors.tintText
