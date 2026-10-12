@@ -58,9 +58,17 @@ export class WhatsappQueueService {
     return whatsappBudget((k) => this.config.get<string>(k));
   }
 
-  /** Marketing messages sent this India month, all campaigns (what Meta bills). */
+  /**
+   * Marketing messages sent this India month, all campaigns — what Meta
+   * bills. A message Meta accepted but then failed to deliver (131049 held
+   * back, 131026 not on WhatsApp, 131050 stopped marketing) is not billed,
+   * so it does not use up the budget either.
+   */
   sentThisMonth(): Promise<number> {
-    return this.recipientModel.countDocuments({ sentAt: { $gte: istMonthStart() } });
+    return this.recipientModel.countDocuments({
+      sentAt: { $gte: istMonthStart() },
+      status: { $nin: ['FAILED', 'OPTED_OUT'] },
+    });
   }
 
   /** Different numbers messaged by campaigns in the last 24 hours. */

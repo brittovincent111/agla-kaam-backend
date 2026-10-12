@@ -59,7 +59,18 @@ interface RegionPlan {
   name: string;
   language: string;
   searches: { planned: number; jobIds: string[]; combos: string[] };
-  whatsapp: { count: number; leadIds: string[]; sample: string[]; template?: string; languageCode?: string; campaignId?: string; note?: string };
+  whatsapp: {
+    count: number;
+    leadIds: string[];
+    sample: string[];
+    template?: string;
+    languageCode?: string;
+    campaignId?: string;
+    note?: string;
+    // Replacements for messages that failed, added during the day.
+    topUpCampaignIds?: string[];
+    toppedUp?: number;
+  };
   email: {
     count: number;
     leadIds: string[];
@@ -168,6 +179,18 @@ export class AutopilotService implements OnModuleInit {
     return { ...DEFAULT_MESSAGES.en, ...(s.messages?.en ?? {}), ...(DEFAULT_MESSAGES[language] ?? {}), ...(s.messages?.[language] ?? {}) };
   }
 
+  /** Leads in a region WhatsApp can reach that have never been messaged. */
+  private freshWhatsappQuery(r: AutopilotRegionDocument): Record<string, any> {
+    return {
+      ...this.regionLeadMatch(r),
+      status: { $in: ['NEW', 'REVIEWED'] },
+      phoneType: 'mobile',
+      phoneNormalized: { $exists: true, $ne: '' },
+      isWhatsappOptedOut: { $ne: true },
+      lastWhatsappAt: { $exists: false },
+    };
+  }
+
   private regionLeadMatch(r: AutopilotRegionDocument): Record<string, any> {
     const cities = r.places.map((p) => new RegExp(`^${escapeRx(p.city.trim())}$`, 'i'));
     const match: Record<string, any> = { city: { $in: cities } };
@@ -188,12 +211,19 @@ export class AutopilotService implements OnModuleInit {
   async searchBudget(now = new Date()) {
     const s = await this.settings();
     const used = await this.usage.monthRequests('google_places');
-    const usedToday = (await this.usage.getTelemetrySummary('google_places')).todayRequests;
+    const telemetry = await this.usage.getTelemetrySummary('google_places');
+    const usedToday = telemetry.todayRequests;
     // Fixed at the start of the day, so pressing "Search" again can't spend tomorrow's share.
     // The admin setting can lower it, never raise it past the server's cap.
     const freeMonthly = Math.min(s.searchFreeMonthly || this.usage.monthlyLimit, this.usage.monthlyLimit);
     const leftAtDayStart = Math.max(0, freeMonthly - (used - usedToday));
-    const today = Math.floor(leftAtDayStart / istDaysLeftInMonth(now));
+    // Never above the server's daily cap (LEAD_FINDER_DAILY_LIMIT): the search
+    // service refuses calls past it, so planning more promised calls that
+    // could never be made.
+    const today = Math.min(
+      Math.floor(leftAtDayStart / istDaysLeftInMonth(now)),
+      telemetry.dailyLimit,
+    );
     return {
       freeMonthly,
       usedThisMonth: used,
@@ -434,6 +464,11 @@ export class AutopilotService implements OnModuleInit {
       brakes,
       emailHealth: { sent, bounceRate, complaintRate },
       whatsappMonth: { ...monthBudget, sent: await this.waQueue.sentThisMonth() },
+      // Messages actually sent since midnight India time — `whatsapp` above is
+      // the per-day limit, worked out afresh, not what went out today.
+      whatsappSentToday: await this.waRecipientModel
+        .countDocuments({ sentAt: { $gte: istDayStart(dayKey) } })
+        .exec(),
     };
   }
 
@@ -467,7 +502,7 @@ export class AutopilotService implements OnModuleInit {
         const wa = r.useWhatsapp
           ? (
               await this.leadModel
-                .find({ ...base, status: { $in: ['NEW', 'REVIEWED'] }, phoneType: 'mobile', phoneNormalized: { $exists: true, $ne: '' }, isWhatsappOptedOut: { $ne: true }, lastWhatsappAt: { $exists: false } })
+                .find(this.freshWhatsappQuery(r))
                 .sort({ createdAt: 1 })
                 .select('_id businessName city phoneNormalized')
                 .limit(2000)
@@ -733,6 +768,101 @@ export class AutopilotService implements OnModuleInit {
     }
   }
 
+  // ------------------------------------------------------------ top-up (hourly)
+
+  /**
+   * Keeps each region at the number of WhatsApp messages approved for the
+   * day. Some always fail (Meta holds back a marketing message, or the
+   * number is not on WhatsApp); those are not billed, so their place goes to
+   * fresh people from the same region, with the same message. Never above the
+   * approved number or the month's budget.
+   */
+  async topUpWhatsapp(dayKey = istDayKey()): Promise<number> {
+    if (!this.waCloud.isConfigured() || !this.emailQueue.sendWindow().open) return 0;
+    const day = await this.dayModel.findOne({ dayKey }).exec();
+    if (!day?.regions?.length) return 0;
+    const plans = day.regions as RegionPlan[];
+    if (!plans.some((p) => p.whatsapp?.campaignId)) return 0;
+
+    // Room left in the month's budget, after what is already waiting to go.
+    const budget = this.waQueue.budget();
+    let room = Infinity;
+    if (budget.monthlyCap !== null) {
+      const [sent, waiting] = await Promise.all([
+        this.waQueue.sentThisMonth(),
+        this.waRecipientModel.countDocuments({ status: { $in: ['QUEUED', 'SENDING'] } }),
+      ]);
+      room = Math.max(0, budget.monthlyCap - sent - waiting);
+    }
+    if (room <= 0) return 0;
+
+    const regions = await this.regions();
+    const messaged = new Set(
+      (await this.waRecipientModel.distinct('phone').exec()).map((p: string) => `+${p}`),
+    );
+    let added = 0;
+
+    for (const plan of plans) {
+      const w = plan.whatsapp;
+      if (!w?.campaignId || !w.count || room <= 0) continue;
+      const region = regions.find((r) => r.id === plan.regionId);
+      if (!region?.enabled || !region.useWhatsapp) continue;
+
+      const ids = [w.campaignId, ...(w.topUpCampaignIds ?? [])];
+      const live = await this.waRecipientModel.countDocuments({
+        campaignId: { $in: ids },
+        status: { $in: ['QUEUED', 'SENDING', 'SENT', 'DELIVERED', 'READ'] },
+      });
+      const need = Math.min(w.count - live, room);
+      if (need <= 0) continue;
+
+      const taken = new Set(w.leadIds ?? []);
+      const fresh = (
+        await this.leadModel
+          .find(this.freshWhatsappQuery(region))
+          .sort({ createdAt: 1 })
+          .select('_id phoneNormalized')
+          .limit(need * 3 + 20)
+          .exec()
+      )
+        .filter((l) => !messaged.has(l.phoneNormalized!) && !taken.has(l._id.toString()))
+        .slice(0, need);
+      if (!fresh.length) continue;
+
+      const main = await this.waCampaignModel.findById(w.campaignId).select('headerImageUrl').lean().exec();
+      try {
+        const c = await this.waCampaigns.create(
+          {
+            name: `Autopilot · ${plan.name} · ${dayKey} · top-up`,
+            templateName: w.template,
+            languageCode: w.languageCode,
+            headerImageUrl: (main as any)?.headerImageUrl || undefined,
+            bodyParams: ['businessName'],
+            selectedLeadIds: fresh.map((l) => l._id.toString()),
+            skipAlreadyMessaged: true,
+          } as any,
+          'autopilot:top-up',
+        );
+        await this.waCampaigns.start(c.id);
+        w.topUpCampaignIds = [...(w.topUpCampaignIds ?? []), c.id];
+        w.toppedUp = (w.toppedUp ?? 0) + fresh.length;
+        w.leadIds = [...(w.leadIds ?? []), ...fresh.map((l) => l._id.toString())];
+        for (const l of fresh) messaged.add(l.phoneNormalized!);
+        room -= fresh.length;
+        added += fresh.length;
+      } catch (err: any) {
+        this.logger.warn(`WhatsApp top-up for ${plan.name} not started: ${err.message}`);
+      }
+    }
+
+    if (added) {
+      day.markModified('regions');
+      await day.save();
+      this.logger.log(`WhatsApp top-up: ${added} replacement message(s) queued for ${dayKey}`);
+    }
+    return added;
+  }
+
   // ------------------------------------------------------------ overview for the admin page
 
   async overview() {
@@ -745,10 +875,30 @@ export class AutopilotService implements OnModuleInit {
       this.searchBudget(),
       this.limits(dayKey),
     ]);
+    // Calls each region's searches actually made (a search stops once Google
+    // has no more results), next to the calls planned for it.
+    const todayView: any = today ? stripLeadIds(today.toObject()) : { dayKey };
+    if (todayView.regions?.length) {
+      const ids = todayView.regions.flatMap((r: any) => r.searches?.jobIds ?? []);
+      const jobs = ids.length
+        ? await this.jobModel.find({ _id: { $in: ids } }).select('apiRequestsCount').lean().exec()
+        : [];
+      const callsByJob = new Map(jobs.map((j: any) => [String(j._id), j.apiRequestsCount ?? 0]));
+      let usedTotal = 0;
+      for (const r of todayView.regions) {
+        if (!r.searches) continue;
+        r.searches.used = (r.searches.jobIds ?? []).reduce(
+          (n: number, id: string) => n + (callsByJob.get(String(id)) ?? 0),
+          0,
+        );
+        usedTotal += r.searches.used;
+      }
+      todayView.searchUsed = usedTotal;
+    }
     return {
       settings: s,
       regions,
-      today: today ? stripLeadIds(today.toObject()) : { dayKey },
+      today: todayView,
       history: history.map((d) => stripLeadIds(d.toObject())),
       budget,
       limits: lim,

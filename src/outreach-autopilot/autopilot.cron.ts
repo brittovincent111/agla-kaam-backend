@@ -11,6 +11,7 @@ const IST = { timeZone: 'Asia/Kolkata' };
  *   06:00  lead search, inside the free Google quota
  *   06:40  emails from websites, and who already uses the app
  *   07:30  today's plan (waits for approval, or launches)
+ *   11:15–18:15 hourly, Mon–Sat: failed WhatsApp messages replaced
  *   17:00  an unapproved plan is dropped
  *   20:00  report
  */
@@ -43,6 +44,13 @@ export class AutopilotCron {
   @Cron('30 7 * * *', IST)
   plan() {
     return this.whenOn('plan', () => this.autopilot.buildPlan());
+  }
+
+  // Failures come back from Meta within minutes; an hour later is enough to
+  // see them and still send the replacements inside sending hours.
+  @Cron('15 11-18 * * 1-6', IST)
+  topUp() {
+    return this.whenOn('WhatsApp top-up', () => this.autopilot.topUpWhatsapp());
   }
 
   @Cron('0 17 * * *', IST)
