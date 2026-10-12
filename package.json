@@ -20,7 +20,8 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
-    "mark:reminder-visits": "node dist/scripts/mark-reminder-visits.js"
+    "mark:reminder-visits": "node dist/scripts/mark-reminder-visits.js",
+    "fix:whatsapp-auto-replies": "node dist/scripts/fix-whatsapp-auto-replies.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1121.0",

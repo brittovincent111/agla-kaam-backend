@@ -149,6 +149,10 @@ export class Lead {
   @Prop()
   whatsappRepliedAt?: Date;
 
+  // Their WhatsApp Business answered automatically; not a reply from a person.
+  @Prop()
+  whatsappAutoReplyAt?: Date;
+
   // Where the email came from ('website' when read off the lead's own site),
   // and when the website was last checked, so it isn't fetched again soon.
   @Prop()

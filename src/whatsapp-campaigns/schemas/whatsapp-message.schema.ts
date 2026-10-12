@@ -44,6 +44,10 @@ export class WhatsappMessage {
 
   // Sent by the assistant, not a person — shown as "auto" in the inbox.
   @Prop() auto?: boolean;
+
+  // An incoming automatic greeting from the business's own WhatsApp Business
+  // (see auto-reply.ts): kept in the inbox, but not counted as a reply.
+  @Prop() autoReply?: boolean;
 }
 
 export const WhatsappMessageSchema = SchemaFactory.createForClass(WhatsappMessage);

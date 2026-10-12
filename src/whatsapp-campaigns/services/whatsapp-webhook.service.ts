@@ -6,6 +6,7 @@ import { WhatsappMessage, WhatsappMessageDocument } from '../schemas/whatsapp-me
 import { Lead, LeadDocument } from '../../lead-finder/schemas/lead.schema';
 import { WhatsappQueueService } from './whatsapp-queue.service';
 import { WhatsappBotService } from './whatsapp-bot.service';
+import { looksLikeAutoReply } from '../auto-reply';
 
 // Replies that mean "stop" — the template's opt-out button in English and
 // Hindi, and the words people type.
@@ -112,6 +113,14 @@ export class WhatsappWebhookService {
     const leadId =
       recipient?.leadId ?? (await this.leadModel.findOne({ phoneNormalized: `+${phone}` }).select('_id').exec())?._id;
 
+    // A tapped button is always a person; free text may be the business's
+    // own automatic greeting.
+    const tapped = !!(m.interactive || m.button);
+    const ourAt = recipient?.deliveredAt ?? recipient?.sentAt;
+    const autoReply =
+      !tapped &&
+      looksLikeAutoReply(text, ourAt ? (at.getTime() - ourAt.getTime()) / 1000 : null);
+
     await this.messageModel.create({
       direction: 'in',
       phone,
@@ -122,8 +131,18 @@ export class WhatsappWebhookService {
       text,
       waMessageId: m.id,
       at,
-      handled: false,
+      handled: autoReply,
+      ...(autoReply ? { autoReply: true } : {}),
     });
+
+    // Not a person: no reply counted, no status change, and the assistant
+    // stays quiet (it would only be talking to their bot).
+    if (autoReply) {
+      if (leadId) {
+        await this.leadModel.updateOne({ _id: leadId }, { $set: { whatsappAutoReplyAt: at } }).exec();
+      }
+      return recipient ? recipient.campaignId.toString() : null;
+    }
 
     const said = text.trim().toLowerCase();
     const wasStop = STOP_WORDS.includes(said);
