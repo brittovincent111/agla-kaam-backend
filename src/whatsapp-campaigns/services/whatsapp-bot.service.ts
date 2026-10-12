@@ -10,7 +10,7 @@ import { WhatsappCampaign, WhatsappCampaignDocument } from '../schemas/whatsapp-
 import { WhatsappCloudService } from './whatsapp-cloud.service';
 import { EmailService } from '../../common/email/email.service';
 import { istMonthStart, whatsappBudget } from '../../common/utils/outreach-budget';
-import { BUTTON_IDS, COPY, botLang, intentOf, type BotLang, type Intent } from '../bot-copy';
+import { BUTTON_IDS, COPY, botLang, intentOf, type BotLang, type Intent, demoMessage } from '../bot-copy';
 
 const HOUR = 3600_000;
 // WhatsApp lets us write freely for 24 hours after their last message; the
@@ -139,8 +139,7 @@ export class WhatsappBotService {
         await this.sayLink(e.phone, null, copy.getAppBody, copy.getAppCta, download);
         return;
       case 'demo': {
-        const video = this.demoVideo(lang);
-        if (video) await this.say(e.phone, null, `${copy.demoBody}\n${video}`);
+        await this.say(e.phone, null, this.demoText(lang));
         await this.sayLink(e.phone, null, copy.getAppBody, copy.getAppCta, download);
         return;
       }
@@ -183,8 +182,7 @@ export class WhatsappBotService {
 
   private async sendDemo(phone: string, lead: LeadDocument, lang: BotLang): Promise<void> {
     const copy = COPY[lang];
-    const video = this.demoVideo(lang);
-    if (video) await this.say(phone, lead, `${copy.demoBody}\n${video}`);
+    await this.say(phone, lead, this.demoText(lang));
     await this.sayLink(phone, lead, copy.getAppBody, copy.getAppCta, this.downloadLink(lead._id));
   }
 
@@ -360,9 +358,14 @@ export class WhatsappBotService {
     return target;
   }
 
-  private demoVideo(lang: BotLang): string | undefined {
+  /**
+   * The four demo videos (DEMO_VIDEOS). A link in WHATSAPP_DEMO_VIDEO_URL
+   * (or _HI / _ML) is sent instead, for one video made for a campaign.
+   */
+  private demoText(lang: BotLang): string {
     const key = lang === 'en' ? 'WHATSAPP_DEMO_VIDEO_URL' : `WHATSAPP_DEMO_VIDEO_URL_${lang.toUpperCase()}`;
-    return this.config.get<string>(key) || this.config.get<string>('WHATSAPP_DEMO_VIDEO_URL') || undefined;
+    const single = this.config.get<string>(key)?.trim();
+    return single ? `${COPY[lang].demoBody}\n${single}` : demoMessage(lang);
   }
 
   /** The campaign's language for this lead, remembered on the lead. */

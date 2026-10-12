@@ -44,7 +44,7 @@ export const COPY: Record<BotLang, Copy> = {
     buttons: { getApp: '📲 Get the app', demo: '🎥 Watch demo', callMe: '📞 Call me' },
     getAppBody: 'Here is the app. Sign up with this same number, add a customer, and log their last service — the reminders start on their own.',
     getAppCta: 'Download app',
-    demoBody: 'A 2-minute look at how it works:',
+    demoBody: 'Short videos of how Agla Kaam works — each under a minute:',
     callMeReply: 'Thanks! Someone from Agla Kaam will call you on this number soon (10 am – 7 pm).',
     price: 'Free for up to 25 customers. Paid plans start at ₹799 a year — no card needed to start.',
     notInterested: 'No problem, thank you for replying. We won’t message you again. If you ever need it, just send "Hi".',
@@ -61,7 +61,7 @@ export const COPY: Record<BotLang, Copy> = {
     buttons: { getApp: '📲 ऐप पाएँ', demo: '🎥 डेमो देखें', callMe: '📞 कॉल करें' },
     getAppBody: 'यह रहा ऐप। इसी नंबर से साइन अप करें, एक ग्राहक जोड़ें और उसकी पिछली सर्विस लिखें — रिमाइंडर अपने-आप शुरू हो जाएँगे।',
     getAppCta: 'ऐप डाउनलोड करें',
-    demoBody: '2 मिनट में देखें यह कैसे काम करता है:',
+    demoBody: 'Agla Kaam कैसे काम करता है — एक-एक मिनट के छोटे वीडियो:',
     callMeReply: 'धन्यवाद! Agla Kaam से कोई जल्द ही इसी नंबर पर कॉल करेगा (सुबह 10 – शाम 7)।',
     price: '25 ग्राहकों तक बिल्कुल फ़्री। पेड प्लान ₹799 प्रति वर्ष से — शुरू करने के लिए कोई कार्ड नहीं चाहिए।',
     notInterested: 'कोई बात नहीं, जवाब देने के लिए धन्यवाद। हम आपको दोबारा मैसेज नहीं करेंगे। कभी ज़रूरत हो तो बस "Hi" भेजें।',
@@ -77,7 +77,7 @@ export const COPY: Record<BotLang, Copy> = {
     buttons: { getApp: '📲 ആപ്പ് എടുക്കാം', demo: '🎥 ഡെമോ കാണാം', callMe: '📞 വിളിക്കൂ' },
     getAppBody: 'ഇതാ ആപ്പ്. ഇതേ നമ്പറിൽ സൈൻ അപ്പ് ചെയ്യുക, ഒരു കസ്റ്റമറെ ചേർത്ത് അവസാന സർവീസ് രേഖപ്പെടുത്തുക — റിമൈൻഡറുകൾ സ്വയം തുടങ്ങും.',
     getAppCta: 'ആപ്പ് ഡൗൺലോഡ്',
-    demoBody: '2 മിനിറ്റിൽ എങ്ങനെ പ്രവർത്തിക്കുന്നു എന്ന് കാണാം:',
+    demoBody: 'Agla Kaam എങ്ങനെ പ്രവർത്തിക്കുന്നു — ഓരോന്നും ഒരു മിനിറ്റിൽ താഴെയുള്ള വീഡിയോകൾ:',
     callMeReply: 'നന്ദി! Agla Kaam-ൽ നിന്ന് ഉടൻ ഈ നമ്പറിൽ വിളിക്കും (രാവിലെ 10 – വൈകിട്ട് 7).',
     price: '25 കസ്റ്റമർ വരെ പൂർണ്ണമായും ഫ്രീ. പെയ്ഡ് പ്ലാൻ വർഷം ₹799 മുതൽ — തുടങ്ങാൻ കാർഡ് വേണ്ട.',
     notInterested: 'കുഴപ്പമില്ല, മറുപടിക്ക് നന്ദി. ഇനി മെസ്സേജ് അയക്കില്ല. എപ്പോഴെങ്കിലും വേണമെങ്കിൽ "Hi" എന്ന് അയച്ചാൽ മതി.',
@@ -112,4 +112,49 @@ export function intentOf(text: string): Intent | null {
     }
   }
   return null;
+}
+
+/**
+ * The demo videos "Watch demo" sends, in the order a new owner meets them.
+ * YouTube Shorts, each under a minute.
+ */
+export const DEMO_VIDEOS: { url: string; title: Record<BotLang, string> }[] = [
+  {
+    url: 'https://youtube.com/shorts/o9ko2AmHVE4',
+    title: {
+      en: 'Create a quick note reminder',
+      hi: 'क्विक नोट रिमाइंडर बनाएँ',
+      ml: 'ക്വിക്ക് നോട്ട് റിമൈൻഡർ ഉണ്ടാക്കാം',
+    },
+  },
+  {
+    url: 'https://youtube.com/shorts/oiRVjI9eoPM',
+    title: {
+      en: 'Book services and set follow-up reminders',
+      hi: 'सर्विस बुक करें और फॉलो-अप रिमाइंडर लगाएँ',
+      ml: 'സർവീസ് ബുക്ക് ചെയ്ത് ഫോളോ-അപ്പ് റിമൈൻഡർ വെക്കാം',
+    },
+  },
+  {
+    url: 'https://youtube.com/shorts/g3mWslYrsEQ',
+    title: {
+      en: 'Add technicians and assign jobs',
+      hi: 'टेक्नीशियन जोड़ें और काम सौंपें',
+      ml: 'ടെക്നീഷ്യനെ ചേർത്ത് ജോലി ഏൽപ്പിക്കാം',
+    },
+  },
+  {
+    url: 'https://youtube.com/shorts/dX76fYjlj_Q',
+    title: {
+      en: 'Complete jobs, create invoices and set reminders',
+      hi: 'काम पूरा करें, बिल बनाएँ और रिमाइंडर लगाएँ',
+      ml: 'ജോലി പൂർത്തിയാക്കി ബിൽ ഉണ്ടാക്കി റിമൈൻഡർ വെക്കാം',
+    },
+  },
+];
+
+/** "Watch demo": the intro, then each video numbered with its title. */
+export function demoMessage(lang: BotLang): string {
+  const lines = DEMO_VIDEOS.map((v, i) => `${i + 1}. ${v.title[lang]}\n${v.url}`);
+  return [COPY[lang].demoBody, ...lines].join('\n\n');
 }

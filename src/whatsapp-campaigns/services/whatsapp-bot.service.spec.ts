@@ -1,6 +1,6 @@
 import { Types } from 'mongoose';
 import { WhatsappBotService } from './whatsapp-bot.service';
-import { BUTTON_IDS, COPY, intentOf } from '../bot-copy';
+import { BUTTON_IDS, COPY, intentOf, DEMO_VIDEOS } from '../bot-copy';
 
 // The WhatsApp assistant: what it answers, when it stays quiet, and its
 // follow-ups. Models are small fakes; the cloud service records what would
@@ -111,7 +111,22 @@ describe('replies', () => {
     );
   });
 
-  it('"Watch demo" sends the video in their language, then the app', async () => {
+  it('"Watch demo" sends all four demo videos with titles in their language, then the app', async () => {
+    const { bot, lead, cloud } = build();
+    lead.whatsappLanguage = 'ml';
+    await bot.onInbound(event(lead, { buttonId: BUTTON_IDS.demo }));
+    const text = cloud.sendText.mock.calls[0][1] as string;
+    expect(text.startsWith(COPY.ml.demoBody)).toBe(true);
+    for (const v of DEMO_VIDEOS) {
+      expect(text).toContain(v.url);
+      expect(text).toContain(v.title.ml);
+    }
+    expect(text).toContain('1. ');
+    expect(text).toContain('4. ');
+    expect(cloud.sendLinkButton).toHaveBeenCalled();
+  });
+
+  it('"Watch demo" sends one campaign video instead when set', async () => {
     const { bot, lead, cloud } = build({ config: { WHATSAPP_DEMO_VIDEO_URL_HI: 'https://youtu.be/hindi' } });
     lead.whatsappLanguage = 'hi';
     await bot.onInbound(event(lead, { buttonId: BUTTON_IDS.demo }));
