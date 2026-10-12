@@ -10,7 +10,7 @@ import { WhatsappCampaign, WhatsappCampaignDocument } from '../schemas/whatsapp-
 import { WhatsappCloudService } from './whatsapp-cloud.service';
 import { EmailService } from '../../common/email/email.service';
 import { istMonthStart, whatsappBudget } from '../../common/utils/outreach-budget';
-import { BUTTON_IDS, COPY, botLang, intentOf, type BotLang, type Intent, demoMessage } from '../bot-copy';
+import { BUTTON_IDS, COPY, botLang, intentOf, type BotLang, type Intent, demoMessage, ownerNote, tradeWord, OWNER_NOTE_DEMO } from '../bot-copy';
 
 const HOUR = 3600_000;
 // WhatsApp lets us write freely for 24 hours after their last message; the
@@ -111,9 +111,35 @@ export class WhatsappBotService {
       default:
         // Something it cannot answer: say a person will reply, once, and
         // leave the conversation to that person.
-        await this.say(e.phone, lead, copy.ack);
+        // Still a way to the app while they wait: never miss the download.
+        await this.sayLink(e.phone, lead, copy.ack, copy.getAppCta, this.downloadLink(lead._id));
         await this.pause(lead._id);
     }
+  }
+
+  /**
+   * Their WhatsApp Business answered automatically. That greeting opens the
+   * free 24-hour window, so the owner gets one note to read later — once per
+   * lead, so a second greeting or away message never starts a chat between
+   * two bots. Nothing here counts as a reply.
+   */
+  async onAutoReply(phone: string, lead: LeadDocument | null): Promise<void> {
+    if (!this.enabled() || !lead) return;
+    if (lead.whatsappBotPausedAt || lead.isWhatsappOptedOut || lead.status === 'INSTALLED') return;
+    // Claimed before sending, so two greetings arriving together send one note.
+    const claimed = await this.leadModel
+      .updateOne({ _id: lead._id, whatsappOwnerNoteAt: { $exists: false } }, { $set: { whatsappOwnerNoteAt: new Date() } })
+      .exec();
+    if (!claimed.modifiedCount) return;
+    const lang = await this.languageFor(lead, null);
+    const copy = COPY[lang];
+    await this.sayLink(
+      phone,
+      lead,
+      ownerNote(lang, tradeWord(lead.category), OWNER_NOTE_DEMO),
+      copy.getAppCta,
+      this.downloadLink(lead._id),
+    );
   }
 
   /**
@@ -157,7 +183,7 @@ export class WhatsappBotService {
         const acked = await this.messageModel
           .exists({ phone: e.phone, auto: true, at: { $gte: new Date(Date.now() - WINDOW_MS) } })
           .exec();
-        if (!acked) await this.say(e.phone, null, copy.ack);
+        if (!acked) await this.sayLink(e.phone, null, copy.ack, copy.getAppCta, download);
       }
     }
   }

@@ -153,6 +153,10 @@ export class Lead {
   @Prop()
   whatsappAutoReplyAt?: Date;
 
+  // When the one note to the owner went out after that auto-reply (never twice).
+  @Prop()
+  whatsappOwnerNoteAt?: Date;
+
   // Where the email came from ('website' when read off the lead's own site),
   // and when the website was last checked, so it isn't fetched again soon.
   @Prop()

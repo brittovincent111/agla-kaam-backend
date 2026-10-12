@@ -54,7 +54,10 @@ describe('WhatsApp webhook with an auto-reply', () => {
       updateOne: jest.fn(() => exec({})),
     };
     const queue: any = { syncCounters: jest.fn() };
-    const bot: any = { onInbound: jest.fn().mockResolvedValue(undefined) };
+    const bot: any = {
+      onInbound: jest.fn().mockResolvedValue(undefined),
+      onAutoReply: jest.fn().mockResolvedValue(undefined),
+    };
     jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     const service = new WhatsappWebhookService(
       recipientModel,
@@ -110,6 +113,7 @@ describe('WhatsApp webhook with an auto-reply', () => {
       { $set: { whatsappAutoReplyAt: expect.any(Date) } },
     );
     expect(bot.onInbound).not.toHaveBeenCalled();
+    expect(bot.onAutoReply).toHaveBeenCalledWith('919000000001', lead);
   });
 
   it('still counts a tapped button even if it arrives within seconds', async () => {

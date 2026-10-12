@@ -135,11 +135,16 @@ export class WhatsappWebhookService {
       ...(autoReply ? { autoReply: true } : {}),
     });
 
-    // Not a person: no reply counted, no status change, and the assistant
-    // stays quiet (it would only be talking to their bot).
+    // Not a person: no reply counted and no status change. The assistant
+    // sends the owner one note and otherwise stays out of it.
     if (autoReply) {
       if (leadId) {
         await this.leadModel.updateOne({ _id: leadId }, { $set: { whatsappAutoReplyAt: at } }).exec();
+        // One note to the owner, who reads the chat later.
+        const lead = await this.leadModel.findById(leadId).exec();
+        await this.bot
+          .onAutoReply(phone, lead)
+          .catch((err) => this.logger.error(`Owner note to ${phone} failed: ${(err as Error).message}`));
       }
       return recipient ? recipient.campaignId.toString() : null;
     }

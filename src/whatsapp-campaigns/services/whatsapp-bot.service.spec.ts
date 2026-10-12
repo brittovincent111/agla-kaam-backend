@@ -1,6 +1,6 @@
 import { Types } from 'mongoose';
 import { WhatsappBotService } from './whatsapp-bot.service';
-import { BUTTON_IDS, COPY, intentOf, DEMO_VIDEOS } from '../bot-copy';
+import { BUTTON_IDS, COPY, intentOf, DEMO_VIDEOS, OWNER_NOTE_DEMO, tradeWord } from '../bot-copy';
 
 // The WhatsApp assistant: what it answers, when it stays quiet, and its
 // follow-ups. Models are small fakes; the cloud service records what would
@@ -172,10 +172,10 @@ describe('replies', () => {
     expect(set).toMatchObject({ isWhatsappOptedOut: true });
   });
 
-  it('anything else: says a person will reply, then stays out of the chat', async () => {
+  it('anything else: says a person will reply, with the app link meanwhile, then stays out of the chat', async () => {
     const { bot, lead, cloud, updates } = build();
     await bot.onInbound(event(lead, { text: 'do you also service fridges in Aluva' }));
-    expect(cloud.sendText).toHaveBeenCalledWith(PHONE, COPY.en.ack);
+    expect(cloud.sendLinkButton).toHaveBeenCalledWith(PHONE, COPY.en.ack, COPY.en.getAppCta, expect.stringContaining(String(LEAD_ID)));
     expect(updates.some((u) => u.update.$set?.whatsappBotPausedAt)).toBe(true);
   });
 
@@ -275,5 +275,52 @@ describe('the download link', () => {
     const { bot, updates } = build();
     await expect(bot.clicked('nonsense')).resolves.toBe('https://aglakaam.app/download');
     expect(updates).toHaveLength(0);
+  });
+});
+
+describe('after their WhatsApp Business answers automatically', () => {
+  it('sends the owner one note with the demo and a download button', async () => {
+    const { bot, lead, cloud } = build();
+    lead.status = 'CONTACTED';
+    lead.category = 'AC repair service';
+    await bot.onAutoReply(PHONE, lead);
+    expect(cloud.sendLinkButton).toHaveBeenCalledTimes(1);
+    const [to, text, label, url] = cloud.sendLinkButton.mock.calls[0];
+    expect(to).toBe(PHONE);
+    expect(text).toContain('This message is for the owner');
+    expect(text).toContain('next AC service is due');
+    expect(text).toContain(OWNER_NOTE_DEMO);
+    expect(text).toContain('reply YES');
+    expect(label).toBe(COPY.en.getAppCta);
+    expect(url).toContain(String(LEAD_ID));
+  });
+
+  it('never sends it twice, so two bots never chat', async () => {
+    const { bot, lead, cloud, leadModel } = build();
+    leadModel.updateOne.mockImplementation(() => execOf({ modifiedCount: 0 }));
+    await bot.onAutoReply(PHONE, lead);
+    expect(cloud.sendLinkButton).not.toHaveBeenCalled();
+    expect(cloud.sendText).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['opted out', { isWhatsappOptedOut: true }],
+    ['already installed', { status: 'INSTALLED' }],
+    ['handled by a person', { whatsappBotPausedAt: new Date() }],
+  ])('says nothing when %s', async (_why, fields) => {
+    const { bot, lead, cloud } = build();
+    Object.assign(lead, fields);
+    await bot.onAutoReply(PHONE, lead);
+    expect(cloud.sendLinkButton).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['AC repair service', 'AC'],
+    ['Air conditioning contractor', 'AC'],
+    ['RO water purifier service', 'RO'],
+    ['Pest control service', 'pest control'],
+    ['Electrician', null],
+  ])('trade word for %s → %s', (category, word) => {
+    expect(tradeWord(category)).toBe(word);
   });
 });

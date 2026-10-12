@@ -49,7 +49,7 @@ export const COPY: Record<BotLang, Copy> = {
     price: 'Free for up to 25 customers. Paid plans start at ₹799 a year — no card needed to start.',
     notInterested: 'No problem, thank you for replying. We won’t message you again. If you ever need it, just send "Hi".',
     stopped: 'Done — you won’t get any more messages from us.',
-    ack: 'Thanks for your message! Someone from Agla Kaam will reply here shortly.',
+    ack: 'Thanks for your message! Someone from Agla Kaam will reply here shortly. Meanwhile, you can start free with the app:',
     nudge:
       'Did you get a chance to try Agla Kaam? Add one customer and their last service — the next reminder goes out on its own. Here is the app:',
     installWelcome:
@@ -66,7 +66,7 @@ export const COPY: Record<BotLang, Copy> = {
     price: '25 ग्राहकों तक बिल्कुल फ़्री। पेड प्लान ₹799 प्रति वर्ष से — शुरू करने के लिए कोई कार्ड नहीं चाहिए।',
     notInterested: 'कोई बात नहीं, जवाब देने के लिए धन्यवाद। हम आपको दोबारा मैसेज नहीं करेंगे। कभी ज़रूरत हो तो बस "Hi" भेजें।',
     stopped: 'ठीक है — अब आपको हमारी तरफ़ से कोई मैसेज नहीं आएगा।',
-    ack: 'मैसेज के लिए धन्यवाद! Agla Kaam से कोई जल्द ही यहाँ जवाब देगा।',
+    ack: 'मैसेज के लिए धन्यवाद! Agla Kaam से कोई जल्द ही यहाँ जवाब देगा। तब तक ऐप फ़्री में शुरू करें:',
     nudge: 'क्या आपने Agla Kaam आज़माया? एक ग्राहक और उसकी पिछली सर्विस जोड़ें — अगला रिमाइंडर अपने-आप जाएगा। यह रहा ऐप:',
     installWelcome:
       'Agla Kaam में आपका स्वागत है! 🎉 शुरुआत एक काम से करें: एक ग्राहक जोड़ें और उसकी पिछली सर्विस लिखें। अगली सर्विस पर हम उसे याद दिला देंगे।',
@@ -82,7 +82,7 @@ export const COPY: Record<BotLang, Copy> = {
     price: '25 കസ്റ്റമർ വരെ പൂർണ്ണമായും ഫ്രീ. പെയ്ഡ് പ്ലാൻ വർഷം ₹799 മുതൽ — തുടങ്ങാൻ കാർഡ് വേണ്ട.',
     notInterested: 'കുഴപ്പമില്ല, മറുപടിക്ക് നന്ദി. ഇനി മെസ്സേജ് അയക്കില്ല. എപ്പോഴെങ്കിലും വേണമെങ്കിൽ "Hi" എന്ന് അയച്ചാൽ മതി.',
     stopped: 'ശരി — ഇനി ഞങ്ങളിൽ നിന്ന് മെസ്സേജുകൾ വരില്ല.',
-    ack: 'മെസ്സേജിന് നന്ദി! Agla Kaam-ൽ നിന്ന് ഉടൻ ഇവിടെ മറുപടി ലഭിക്കും.',
+    ack: 'മെസ്സേജിന് നന്ദി! Agla Kaam-ൽ നിന്ന് ഉടൻ ഇവിടെ മറുപടി ലഭിക്കും. അതുവരെ ആപ്പ് ഫ്രീ ആയി തുടങ്ങാം:',
     nudge: 'Agla Kaam ഒന്ന് നോക്കിയോ? ഒരു കസ്റ്റമറെയും അവസാന സർവീസും ചേർക്കൂ — അടുത്ത റിമൈൻഡർ സ്വയം പോകും. ഇതാ ആപ്പ്:',
     installWelcome:
       'Agla Kaam-ലേക്ക് സ്വാഗതം! 🎉 ആദ്യം ഒരു കാര്യം: ഒരു കസ്റ്റമറെ ചേർത്ത് അവസാന സർവീസ് രേഖപ്പെടുത്തുക. അടുത്ത സർവീസിന് ഞങ്ങൾ അവരെ ഓർമ്മിപ്പിക്കും.',
@@ -158,3 +158,39 @@ export function demoMessage(lang: BotLang): string {
   const lines = DEMO_VIDEOS.map((v, i) => `${i + 1}. ${v.title[lang]}\n${v.url}`);
   return [COPY[lang].demoBody, ...lines].join('\n\n');
 }
+
+// Lead categories are free text from the search ("AC repair service",
+// "RO water purifier service"); the trade word shown in the owner note.
+const TRADE_WORDS: [RegExp, string][] = [
+  [/\b(ac|a\.c\.?|air ?condition\w*|hvac)\b/i, 'AC'],
+  [/\b(ro|water purifier)\b/i, 'RO'],
+  [/\b(fridge|refrigerat\w*)\b/i, 'fridge'],
+  [/\bwashing machine\b/i, 'washing machine'],
+  [/\bpest\b/i, 'pest control'],
+  [/\b(inverter|ups|batter\w*)\b/i, 'inverter'],
+  [/\b(car|bike|two wheeler|vehicle)\b/i, 'vehicle'],
+];
+
+export function tradeWord(category: string | undefined | null): string | null {
+  const c = category || '';
+  return TRADE_WORDS.find(([re]) => re.test(c))?.[1] ?? null;
+}
+
+/**
+ * Sent once when a business's WhatsApp Business answers our first message
+ * automatically: their greeting opens the free 24-hour window, and the owner
+ * reads the chat later — so this is written to them, not to their bot.
+ */
+export function ownerNote(lang: BotLang, trade: string | null, demoUrl: string): string {
+  const t = trade ? `${trade} ` : '';
+  if (lang === 'hi') {
+    return `नमस्ते! यह मैसेज मालिक के लिए है 🙂 Agla Kaam आपके ग्राहकों को अगली ${t}सर्विस की तारीख पर WhatsApp पर याद दिलाता है, ताकि वे फिर आपको ही बुलाएँ।\n\n1 मिनट का डेमो: ${demoUrl}\n\nनीचे टैप करके ऐप डाउनलोड करें, या YES लिखें।`;
+  }
+  if (lang === 'ml') {
+    return `നമസ്കാരം! ഈ മെസ്സേജ് ഉടമയ്ക്കുള്ളതാണ് 🙂 കസ്റ്റമറുടെ അടുത്ത ${t}സർവീസ് ഡേറ്റ് ആകുമ്പോൾ Agla Kaam അവരെ WhatsApp-ൽ ഓർമ്മിപ്പിക്കും, അവർ വീണ്ടും നിങ്ങളെ വിളിക്കും.\n\n1 മിനിറ്റ് ഡെമോ: ${demoUrl}\n\nതാഴെ ടാപ്പ് ചെയ്ത് ആപ്പ് ഡൗൺലോഡ് ചെയ്യൂ, അല്ലെങ്കിൽ YES എന്ന് മറുപടി അയക്കൂ.`;
+  }
+  return `Hi! This message is for the owner 🙂 Agla Kaam reminds your customers on WhatsApp when their next ${t}service is due, so they call you again.\n\n1-minute demo: ${demoUrl}\n\nTap below to download the app, or reply YES.`;
+}
+
+/** The demo that shows the reminder itself: booking a service with a follow-up. */
+export const OWNER_NOTE_DEMO = DEMO_VIDEOS[1].url;
