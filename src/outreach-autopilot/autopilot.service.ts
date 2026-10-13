@@ -11,6 +11,7 @@ import {
   AutopilotSettingsDocument,
 } from './schemas/autopilot.schemas';
 import { sendingDaysLeft } from '../common/utils/outreach-budget';
+import { idsFilter } from '../common/utils/id-match';
 import { TradeKind, kindOf, tradeOf } from '../lead-finder/trades';
 import { tradeEmail } from './trade-copy';
 import {
@@ -810,7 +811,7 @@ export class AutopilotService implements OnModuleInit {
 
       const ids = [w.campaignId, ...(w.topUpCampaignIds ?? [])];
       const live = await this.waRecipientModel.countDocuments({
-        campaignId: { $in: ids },
+        campaignId: idsFilter(ids),
         status: { $in: ['QUEUED', 'SENDING', 'SENT', 'DELIVERED', 'READ'] },
       });
       const need = Math.min(w.count - live, room);

@@ -199,26 +199,36 @@ export class WhatsappCloudService {
 
   /**
    * Meta's view of the sending number: quality rating (GREEN / YELLOW / RED)
-   * and messaging tier (how many people a day it may start conversations with).
+   * and the business portfolio's shared rolling 24-hour messaging tier.
    */
   async phoneHealth(): Promise<{ qualityRating?: string; messagingLimitTier?: string; dailyCap?: number }> {
     if (!this.phoneNumberId) throw new WhatsappApiError('WHATSAPP_PHONE_NUMBER_ID is not set.');
     const res = await this.graph<{ quality_rating?: string; messaging_limit_tier?: string }>(
       'GET',
-      `/${this.phoneNumberId}?fields=quality_rating,messaging_limit_tier`,
+      `/${this.phoneNumberId}?fields=${this.wabaId ? 'quality_rating' : 'quality_rating,messaging_limit_tier'}`,
     );
+    // Meta removed the number-level tier. Read the current portfolio limit
+    // from the WABA; otherwise a verified 2K account still looks like 250.
+    const account = this.wabaId
+      ? await this.graph<{ whatsapp_business_manager_messaging_limit?: string }>(
+          'GET',
+          `/${this.wabaId}?fields=whatsapp_business_manager_messaging_limit`,
+        )
+      : undefined;
+    const tier = account?.whatsapp_business_manager_messaging_limit ?? res.messaging_limit_tier;
     const tiers: Record<string, number> = {
       TIER_50: 50,
       TIER_250: 250,
       TIER_1K: 1000,
+      TIER_2K: 2000,
       TIER_10K: 10000,
       TIER_100K: 100000,
       TIER_UNLIMITED: Number.MAX_SAFE_INTEGER,
     };
     return {
       qualityRating: res.quality_rating,
-      messagingLimitTier: res.messaging_limit_tier,
-      dailyCap: res.messaging_limit_tier ? tiers[res.messaging_limit_tier] : undefined,
+      messagingLimitTier: tier,
+      dailyCap: tier ? tiers[tier] : undefined,
     };
   }
 

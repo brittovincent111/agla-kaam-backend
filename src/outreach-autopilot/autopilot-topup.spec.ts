@@ -1,4 +1,7 @@
 import { AutopilotService } from './autopilot.service';
+import { Types } from 'mongoose';
+
+const MAIN_CAMPAIGN_ID = '6acdbeda81b7c09b9d117a1c';
 
 // The hourly WhatsApp top-up, on plain stand-ins for its collaborators.
 function build(o: {
@@ -9,11 +12,12 @@ function build(o: {
   sentThisMonth?: number;
   waiting?: number;
   fresh?: number;
+  stringCampaignId?: boolean;
 }) {
   const plan: any = {
     regionId: 'r1',
     name: 'Kerala',
-    whatsapp: { count: o.approved ?? 100, leadIds: ['L0'], sample: [], campaignId: 'c-main', template: 't', languageCode: 'ml' },
+    whatsapp: { count: o.approved ?? 100, leadIds: ['L0'], sample: [], campaignId: MAIN_CAMPAIGN_ID, template: 't', languageCode: 'ml' },
   };
   const day: any = { regions: [plan], markModified: jest.fn(), save: jest.fn() };
   const leads = Array.from({ length: o.fresh ?? 500 }, (_, i) => ({
@@ -31,7 +35,16 @@ function build(o: {
     sentThisMonth: async () => o.sentThisMonth ?? 0,
   };
   svc.waRecipientModel = {
-    countDocuments: async (q: any) => (q.campaignId ? o.live ?? 0 : o.waiting ?? 0),
+    countDocuments: async (q: any) => {
+      if (!q.campaignId) return o.waiting ?? 0;
+      // MongoDB distinguishes a stored ObjectId from the same ID as text.
+      // campaignId is currently Mixed, so Mongoose does not cast this query.
+      const stored = o.stringCampaignId ? MAIN_CAMPAIGN_ID : new Types.ObjectId(MAIN_CAMPAIGN_ID);
+      const matches = q.campaignId.$in.some(
+        (id: string | Types.ObjectId) => typeof id === typeof stored && id.toString() === stored.toString(),
+      );
+      return matches ? o.live ?? 0 : 0;
+    },
     distinct: () => ({ exec: async () => [] }),
   };
   svc.regions = async () => [{ id: 'r1', enabled: true, useWhatsapp: true }];
@@ -63,6 +76,12 @@ describe('WhatsApp top-up', () => {
   it('adds nothing when the day is already at its approved number', async () => {
     const { svc, created } = build({ approved: 130, live: 130 });
     expect(await svc.topUpWhatsapp('2026-10-12')).toBe(0);
+    expect(created).toHaveLength(0);
+  });
+
+  it('counts queued recipients with legacy string campaign IDs too', async () => {
+    const { svc, created } = build({ approved: 67, live: 67, stringCampaignId: true });
+    expect(await svc.topUpWhatsapp('2026-10-13')).toBe(0);
     expect(created).toHaveLength(0);
   });
 
