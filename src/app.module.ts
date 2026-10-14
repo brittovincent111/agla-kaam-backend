@@ -22,6 +22,7 @@ import { BillingItemsModule } from './billing-items/billing-items.module';
 import { TeamMembersModule } from './team-members/team-members.module';
 import { DocumentTemplatesModule } from './document-templates/document-templates.module';
 import { AppFeedbackModule } from './app-feedback/app-feedback.module';
+import { AppEventsModule } from './app-events/app-events.module';
 import { LegalModule } from './legal/legal.module';
 import { AdminModule } from './admin/admin.module';
 import { AmcModule } from './amc/amc.module';
@@ -82,6 +83,7 @@ import { validate } from './env.validation';
     TeamMembersModule,
     DocumentTemplatesModule,
     AppFeedbackModule,
+    AppEventsModule,
     LegalModule,
     AdminModule,
     AmcModule,
