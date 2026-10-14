@@ -47,6 +47,7 @@ function build(o: {
     },
     distinct: () => ({ exec: async () => [] }),
   };
+  svc.config ??= { get: () => undefined };
   svc.regions = async () => [{ id: 'r1', enabled: true, useWhatsapp: true }];
   svc.regionLeadMatch = () => ({});
   svc.leadModel = {

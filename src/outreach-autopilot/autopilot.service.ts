@@ -52,6 +52,14 @@ const MIN_VOLUME_FOR_BRAKES = 50;
 const EMAIL_MAX_BOUNCE = 0.03;
 const EMAIL_MAX_COMPLAINT = 0.001;
 const WHATSAPP_MAX_OPT_OUT = 0.02;
+// Small, owner-run shops reply far more than big firms (2026-10-14 data:
+// under 10 Google reviews 15.8% replied, 200+ only 2.2% — a big firm's
+// listed number reaches front-desk staff, not the owner). WhatsApp outreach
+// goes to small businesses only, smallest first.
+const WHATSAPP_DEFAULT_MAX_REVIEWS = 99;
+const COMPANY_NAME = /\b(pvt\.?|private)\s*(ltd\.?|limited)\b|\b(limited|ltd\.?|llp)\s*$|authori[sz]ed\s+service/i;
+// Smallest first; leads with no review count (usually the smallest) lead.
+const SMALL_FIRST = { reviewCount: 1, createdAt: 1 } as const;
 // A locality+trade is searched again after this long, deeper each time.
 const RESEARCH_AFTER_DAYS = 21;
 
@@ -189,7 +197,18 @@ export class AutopilotService implements OnModuleInit {
       phoneNormalized: { $exists: true, $ne: '' },
       isWhatsappOptedOut: { $ne: true },
       lastWhatsappAt: { $exists: false },
+      businessName: { $not: COMPANY_NAME },
+      $or: [{ reviewCount: { $exists: false } }, { reviewCount: null }, { reviewCount: { $lte: this.maxWhatsappReviews() } }],
     };
+  }
+
+  /** WHATSAPP_MAX_REVIEWS on the server; 0 turns the size limit off. */
+  private maxWhatsappReviews(): number {
+    const raw = (this.config.get<string>('WHATSAPP_MAX_REVIEWS') ?? '').trim();
+    if (raw === '') return WHATSAPP_DEFAULT_MAX_REVIEWS;
+    const v = Number(raw);
+    if (!Number.isFinite(v) || v < 0) return WHATSAPP_DEFAULT_MAX_REVIEWS;
+    return v === 0 ? Number.MAX_SAFE_INTEGER : v;
   }
 
   private regionLeadMatch(r: AutopilotRegionDocument): Record<string, any> {
@@ -504,7 +523,7 @@ export class AutopilotService implements OnModuleInit {
           ? (
               await this.leadModel
                 .find(this.freshWhatsappQuery(r))
-                .sort({ createdAt: 1 })
+                .sort(SMALL_FIRST)
                 .select('_id businessName city phoneNormalized')
                 .limit(2000)
                 .exec()
@@ -821,7 +840,7 @@ export class AutopilotService implements OnModuleInit {
       const fresh = (
         await this.leadModel
           .find(this.freshWhatsappQuery(region))
-          .sort({ createdAt: 1 })
+          .sort(SMALL_FIRST)
           .select('_id phoneNormalized')
           .limit(need * 3 + 20)
           .exec()
