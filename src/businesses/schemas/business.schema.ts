@@ -248,6 +248,12 @@ export class Business {
   @Prop({ min: 1, max: 20 })
   maxPhones?: number;
 
+  // Where the new-owner nudges are (reminders/onboarding-push.service.ts):
+  // which step, how many sent, when the last went; done once a customer
+  // and a service are in.
+  @Prop({ type: Object })
+  onboardingNudge?: { stage?: 'customer' | 'service'; count?: number; lastAt?: Date; done?: boolean };
+
   // Optional link to the business's Google Review page or Google Maps listing
   // (e.g. https://g.page/r/.../review). When configured, this is automatically
   // appended to completed service card records shared on WhatsApp.

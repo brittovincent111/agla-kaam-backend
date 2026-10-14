@@ -14,11 +14,17 @@ import {
   Business,
   BusinessSchema,
 } from '../businesses/schemas/business.schema';
+import { Customer, CustomerSchema } from '../customers/schemas/customer.schema';
+import { Service, ServiceSchema } from '../services/schemas/service.schema';
+import { OnboardingPushService } from './onboarding-push.service';
+import { EmailService } from '../common/email/email.service';
 
 @Module({
   imports: [
     MongooseModule.forFeature([
       { name: Business.name, schema: BusinessSchema },
+      { name: Customer.name, schema: CustomerSchema },
+      { name: Service.name, schema: ServiceSchema },
     ]),
     ServicesModule,
     CustomersModule,
@@ -29,6 +35,6 @@ import {
     ShortLinksModule,
   ],
   controllers: [RemindersController],
-  providers: [RemindersService, ExpoPushService],
+  providers: [RemindersService, ExpoPushService, OnboardingPushService, EmailService],
 })
 export class RemindersModule {}
