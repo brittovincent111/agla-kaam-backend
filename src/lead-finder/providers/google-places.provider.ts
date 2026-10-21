@@ -1,4 +1,5 @@
 import { searchQueryFor } from '../trades';
+import { isUae, isUaeMobile, uaeDigits } from '../countries';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -36,6 +37,11 @@ export class GooglePlacesProvider implements LeadSourceProvider {
         return /^[6-9]/.test(local) ? 'mobile' : 'landline';
       }
       return 'landline';
+    }
+    if (isUae(country) || digits.startsWith('971')) {
+      const uae = uaeDigits(phone);
+      if (!uae) return 'unknown';
+      return isUaeMobile(uae) ? 'mobile' : 'landline';
     }
     return 'unknown';
   }

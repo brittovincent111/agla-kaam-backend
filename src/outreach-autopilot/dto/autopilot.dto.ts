@@ -1,4 +1,6 @@
 import { Type } from 'class-transformer';
+import { OUTREACH_COUNTRIES } from '../../lead-finder/countries';
+import { REGION_AUDIENCES } from '../schemas/autopilot.schemas';
 import {
   ArrayMaxSize,
   IsArray,
@@ -53,6 +55,8 @@ export class AutopilotRegionDto {
   @IsOptional() @IsBoolean() enabled?: boolean;
   @IsOptional() @IsBoolean() useWhatsapp?: boolean;
   @IsOptional() @IsBoolean() useEmail?: boolean;
+  @IsOptional() @IsIn(OUTREACH_COUNTRIES as unknown as string[]) country?: string;
+  @IsOptional() @IsIn(REGION_AUDIENCES as unknown as string[]) audience?: string;
 }
 
 export class DayKeyParam {

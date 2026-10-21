@@ -64,11 +64,14 @@ export class WhatsappQueueService {
    * back, 131026 not on WhatsApp, 131050 stopped marketing) is not billed,
    * so it does not use up the budget either.
    */
-  sentThisMonth(): Promise<number> {
-    return this.recipientModel.countDocuments({
-      sentAt: { $gte: istMonthStart() },
-      status: { $nin: ['FAILED', 'OPTED_OUT'] },
-    });
+  async sentThisMonth(): Promise<number> {
+    const billed = { sentAt: { $gte: istMonthStart() }, status: { $nin: ['FAILED', 'OPTED_OUT'] as ('FAILED' | 'OPTED_OUT')[] } };
+    const [all, uae] = await Promise.all([
+      this.recipientModel.countDocuments(billed),
+      this.recipientModel.countDocuments({ ...billed, phone: /^971/ }),
+    ]);
+    // In India messages: a UAE one costs several.
+    return Math.ceil(all + uae * (this.budget().uaeFactor - 1));
   }
 
   /** Different numbers messaged by campaigns in the last 24 hours. */

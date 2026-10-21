@@ -7,6 +7,8 @@
  * are what comes back when one is tapped.
  */
 
+import { isUaePhone } from '../lead-finder/countries';
+
 export type BotLang = 'en' | 'hi' | 'ml';
 
 export const BUTTON_IDS = {
@@ -88,6 +90,18 @@ export const COPY: Record<BotLang, Copy> = {
       'Agla Kaam-ലേക്ക് സ്വാഗതം! 🎉 ആദ്യം ഒരു കാര്യം: ഒരു കസ്റ്റമറെ ചേർത്ത് അവസാന സർവീസ് രേഖപ്പെടുത്തുക. അടുത്ത സർവീസിന് ഞങ്ങൾ അവരെ ഓർമ്മിപ്പിക്കും.',
   },
 };
+
+// The same price for a UAE number (common/constants/subscription-options: AED 49).
+const PRICE_AED: Record<BotLang, string> = {
+  en: 'Free for up to 25 customers. Paid plans start at AED 49 a year — no card needed to start.',
+  hi: '25 ग्राहकों तक बिल्कुल फ़्री। पेड प्लान AED 49 प्रति वर्ष से — शुरू करने के लिए कोई कार्ड नहीं चाहिए।',
+  ml: '25 കസ്റ്റമർ വരെ പൂർണ്ണമായും ഫ്രീ. പെയ്ഡ് പ്ലാൻ വർഷം AED 49 മുതൽ — തുടങ്ങാൻ കാർഡ് വേണ്ട.',
+};
+
+/** The price reply, in dirhams for a UAE number and rupees otherwise. */
+export function priceLine(lang: BotLang, phone: string): string {
+  return isUaePhone(phone) ? PRICE_AED[lang] : COPY[lang].price;
+}
 
 // Words people type, by meaning, in English, Hindi (both scripts) and
 // Malayalam (both scripts). Matched as whole words or phrases after

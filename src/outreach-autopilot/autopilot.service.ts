@@ -13,6 +13,8 @@ import {
 import { sendingDaysLeft } from '../common/utils/outreach-budget';
 import { idsFilter } from '../common/utils/id-match';
 import { TradeKind, kindOf, tradeOf } from '../lead-finder/trades';
+import { INDIA, isUae } from '../lead-finder/countries';
+import { MALAYALI_NAME } from '../lead-finder/malayali';
 import { tradeEmail } from './trade-copy';
 import {
   DEFAULT_CATEGORIES,
@@ -211,10 +213,19 @@ export class AutopilotService implements OnModuleInit {
     return v === 0 ? Number.MAX_SAFE_INTEGER : v;
   }
 
+  /** What one message to this region costs, in India messages. */
+  private messageCost(r: AutopilotRegionDocument): number {
+    return isUae(r.country) ? this.waQueue.budget().uaeFactor : 1;
+  }
+
   private regionLeadMatch(r: AutopilotRegionDocument): Record<string, any> {
     const cities = r.places.map((p) => new RegExp(`^${escapeRx(p.city.trim())}$`, 'i'));
     const match: Record<string, any> = { city: { $in: cities } };
     if (r.categories?.length) match.category = { $in: r.categories };
+    // India regions predate the field, and every lead they found says India.
+    if (r.country && r.country !== INDIA) match.country = r.country;
+    if (r.audience === 'malayali') match.$and = [{ businessName: MALAYALI_NAME }];
+    else if (r.audience === 'others') match.$and = [{ businessName: { $not: MALAYALI_NAME } }];
     return match;
   }
 
@@ -289,7 +300,7 @@ export class AutopilotService implements OnModuleInit {
         plan.searches.combos.push(`${combo.area || 'Whole city'}, ${combo.city} · ${combo.category.replace(/_/g, ' ')}`);
         jobs.push({
           plan,
-          dto: { country: 'India', state: combo.state, city: combo.city, area: combo.area || undefined, category: combo.category, limit: 20 * pages, maxRequests: pages },
+          dto: { country: r.country || INDIA, state: combo.state, city: combo.city, area: combo.area || undefined, category: combo.category, limit: 20 * pages, maxRequests: pages },
         });
       }
     });
@@ -558,7 +569,12 @@ export class AutopilotService implements OnModuleInit {
     );
 
     const weights = regions.map((r) => r.weight);
-    const waAlloc = allocate(lim.whatsapp, weights, pools.map((p) => p.wa.length));
+    // The WhatsApp limit is in India messages (what the budget buys); a UAE
+    // message costs several, so a UAE region's share buys fewer of them.
+    const cost = regions.map((r) => this.messageCost(r));
+    const waAlloc = allocate(lim.whatsapp, weights, pools.map((p, i) => Math.floor(p.wa.length * cost[i]))).map((units, i) =>
+      Math.floor(units / cost[i]),
+    );
     const emAlloc = allocate(lim.email, weights, pools.map((p) => p.em.length));
 
     plans.forEach((plan, i) => {
@@ -833,7 +849,8 @@ export class AutopilotService implements OnModuleInit {
         campaignId: idsFilter(ids),
         status: { $in: ['QUEUED', 'SENDING', 'SENT', 'DELIVERED', 'READ'] },
       });
-      const need = Math.min(w.count - live, room);
+      const cost = this.messageCost(region);
+      const need = Math.min(w.count - live, Math.floor(room / cost));
       if (need <= 0) continue;
 
       const taken = new Set(w.leadIds ?? []);
@@ -868,7 +885,7 @@ export class AutopilotService implements OnModuleInit {
         w.toppedUp = (w.toppedUp ?? 0) + fresh.length;
         w.leadIds = [...(w.leadIds ?? []), ...fresh.map((l) => l._id.toString())];
         for (const l of fresh) messaged.add(l.phoneNormalized!);
-        room -= fresh.length;
+        room -= fresh.length * cost;
         added += fresh.length;
       } catch (err: any) {
         this.logger.warn(`WhatsApp top-up for ${plan.name} not started: ${err.message}`);

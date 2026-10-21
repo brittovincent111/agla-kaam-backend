@@ -4,6 +4,7 @@
  *   OUTREACH_MONTHLY_BUDGET_INR    3000   what may be spent a month (0 = no budget cap)
  *   OUTREACH_BUDGET_GAP_PERCENT    20     kept unspent, as a safety margin
  *   WHATSAPP_COST_PER_MESSAGE_INR  1.02   Meta's India marketing rate (₹0.8631) + 18% GST
+ *   WHATSAPP_COST_PER_MESSAGE_INR_AE  3.8  the same for a UAE number (check Meta's rate card)
  *
  * Google searches stay inside their free allowance and email (SES) costs
  * paise, so WhatsApp marketing messages are what the budget pays for.
@@ -16,8 +17,11 @@ export interface WhatsappBudget {
   budgetInr: number;
   usableInr: number;
   costPerMessageInr: number;
-  // Marketing messages a month; null when no budget is set.
+  // Marketing messages a month (counted at India's rate); null when no budget is set.
   monthlyCap: number | null;
+  // How many India messages one UAE message costs. The cap and every count
+  // against it are in India messages, so ₹ stay ₹ whichever country is sent to.
+  uaeFactor: number;
 }
 
 export function whatsappBudget(get: (key: string) => string | undefined): WhatsappBudget {
@@ -30,6 +34,7 @@ export function whatsappBudget(get: (key: string) => string | undefined): Whatsa
     usableInr,
     costPerMessageInr: cost,
     monthlyCap: budgetInr > 0 ? Math.floor(usableInr / cost) : null,
+    uaeFactor: Math.max(1, (Number(get('WHATSAPP_COST_PER_MESSAGE_INR_AE') || 3.8) || 3.8) / cost),
   };
 }
 

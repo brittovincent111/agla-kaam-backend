@@ -10,7 +10,7 @@ import { WhatsappCampaign, WhatsappCampaignDocument } from '../schemas/whatsapp-
 import { WhatsappCloudService } from './whatsapp-cloud.service';
 import { EmailService } from '../../common/email/email.service';
 import { istMonthStart, whatsappBudget } from '../../common/utils/outreach-budget';
-import { BUTTON_IDS, COPY, botLang, intentOf, type BotLang, type Intent, demoMessage, ownerNote, tradeWord, OWNER_NOTE_DEMO } from '../bot-copy';
+import { BUTTON_IDS, COPY, botLang, intentOf, type BotLang, type Intent, demoMessage, ownerNote, tradeWord, OWNER_NOTE_DEMO, priceLine } from '../bot-copy';
 
 const HOUR = 3600_000;
 // WhatsApp lets us write freely for 24 hours after their last message; the
@@ -99,7 +99,7 @@ export class WhatsappBotService {
       case 'callMe':
         return this.callRequested(e.phone, lead, lang);
       case 'price':
-        await this.sayButtons(e.phone, lead, copy.price, lang);
+        await this.sayButtons(e.phone, lead, priceLine(lang, e.phone), lang);
         return;
       case 'no':
         await this.leadModel.updateOne(
@@ -174,7 +174,7 @@ export class WhatsappBotService {
         await this.alertCallRequest(e.phone, null);
         return;
       case 'price':
-        await this.sayButtons(e.phone, null, copy.price, lang);
+        await this.sayButtons(e.phone, null, priceLine(lang, e.phone), lang);
         return;
       case 'no':
         await this.say(e.phone, null, copy.notInterested);

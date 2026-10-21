@@ -9,6 +9,7 @@ describe('whatsappBudget', () => {
       usableInr: 2400,
       costPerMessageInr: 1.02,
       monthlyCap: 2352,
+      uaeFactor: 3.8 / 1.02,
     });
   });
 

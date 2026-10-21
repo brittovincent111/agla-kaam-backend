@@ -3,6 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Lead, LeadDocument } from './schemas/lead.schema';
 import { NormalizedBusinessLead } from './providers/lead-source-provider.interface';
+import { isUae, uaeDigits } from './countries';
 
 export interface DeduplicationResult {
   isDuplicate: boolean;
@@ -23,7 +24,8 @@ export class DeduplicationService {
 
   /**
    * Normalizes a phone number to standard E.164.
-   * Recognizes Indian numbers (+91, 0, 091, bare 10-digits) and international formats.
+   * Recognizes Indian numbers (+91, 0, 091, bare 10-digits), UAE numbers
+   * (+971, 0-prefixed local) and other international formats.
    */
   normalizePhoneNumber(
     rawPhone?: string,
@@ -54,7 +56,13 @@ export class DeduplicationService {
       return `+${digits}`;
     }
 
-    // Gulf numbers (UAE +971, Saudi +966, etc.)
+    // UAE: local forms ("050 123 4567", "04 123 4567") become +971.
+    if (isUae(defaultCountry) || digits.startsWith('971') || digits.startsWith('00971')) {
+      const uae = uaeDigits(trimmed);
+      if (uae) return `+${uae}`;
+    }
+
+    // Other Gulf numbers (Saudi +966, etc.)
     if (digits.startsWith('00')) {
       digits = digits.slice(2);
       hasPlus = true;

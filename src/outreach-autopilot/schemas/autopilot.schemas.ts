@@ -3,6 +3,9 @@ import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 
 // ---------------------------------------------------------------- Region
 
+export const REGION_AUDIENCES = ['all', 'malayali', 'others'] as const;
+export type RegionAudience = (typeof REGION_AUDIENCES)[number];
+
 @Schema({ _id: false })
 export class RegionPlace {
   @Prop({ trim: true, default: '' })
@@ -44,6 +47,16 @@ export class AutopilotRegion {
 
   @Prop({ default: true })
   useEmail: boolean;
+
+  // Searched in, and leads matched by, this country (see lead-finder/countries).
+  @Prop({ default: 'India', trim: true })
+  country: string;
+
+  // malayali: only businesses whose name reads as Kerala-run (lead-finder/
+  // malayali.ts); others: everyone else. For the UAE, where Malayalis get
+  // the Malayalam message and the rest the English one.
+  @Prop({ enum: REGION_AUDIENCES, default: 'all' })
+  audience: RegionAudience;
 }
 export type AutopilotRegionDocument = HydratedDocument<AutopilotRegion>;
 export const AutopilotRegionSchema = SchemaFactory.createForClass(AutopilotRegion);
