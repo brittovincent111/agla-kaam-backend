@@ -4,7 +4,7 @@ import { Model, Types } from 'mongoose';
 import { WhatsappRecipient, WhatsappRecipientDocument } from '../schemas/whatsapp-recipient.schema';
 import { WhatsappMessage, WhatsappMessageDocument } from '../schemas/whatsapp-message.schema';
 import { Lead, LeadDocument } from '../../lead-finder/schemas/lead.schema';
-import { WhatsappQueueService } from './whatsapp-queue.service';
+import { ERR_THROUGHPUT, WhatsappQueueService } from './whatsapp-queue.service';
 import { WhatsappBotService } from './whatsapp-bot.service';
 import { looksLikeAutoReply } from '../auto-reply';
 
@@ -72,6 +72,10 @@ export class WhatsappWebhookService {
     const next = String(s.status || '').toUpperCase();
     if (next === 'FAILED') {
       const err = s.errors?.[0];
+      // Refused for sending too fast: not delivered, not billed — try again.
+      if (err?.code === ERR_THROUGHPUT && (await this.queue.retryRateLimited(recipient))) {
+        return recipient.campaignId.toString();
+      }
       recipient.status = err?.code === 131050 ? 'OPTED_OUT' : 'FAILED';
       recipient.failedAt = at;
       recipient.errorCode = err?.code;

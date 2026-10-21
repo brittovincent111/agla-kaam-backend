@@ -16,13 +16,20 @@ const ERR_MARKETING_LIMITED = 131049; // Meta held it back (per-person marketing
 const ERR_UNDELIVERABLE = 131026; // not on WhatsApp / can't receive
 const ERR_RATE = [130429, 131048, 131056, 80007]; // throughput / spam rate / pair rate
 const ERR_AUTH = [190, 0]; // token expired or invalid — nothing will send
+export const ERR_THROUGHPUT = 130429; // sent too fast from this number
+// After Meta says "too fast", nothing goes from the number for this long.
+const RATE_COOL_DOWN_MS = 30_000;
+const MAX_RATE_RETRIES = 3;
 
 /**
  * Sends WhatsApp campaigns in the background, a recipient at a time.
  *
  * Two limits keep the number safe:
- *  - pace: WHATSAPP_RATE_PER_SECOND (default 5; the API allows far more, a
- *    new number's quality rating does not);
+ *  - pace: WHATSAPP_RATE_PER_SECOND for the whole number, every campaign
+ *    together (default 1, at most 5). It used to be per campaign: the four
+ *    autopilot regions start together, so the number sent ~20 a second and
+ *    Meta refused 101 messages with 130429 "Rate limit hit" (2026-10-21).
+ *    After a 130429 the number pauses for RATE_COOL_DOWN_MS;
  *  - daily cap: WHATSAPP_DAILY_LIMIT different people in any 24 hours across
  *    all campaigns (default 250 — the messaging limit of a new number). At
  *    the cap the worker stops and the minute job resumes it as the window
@@ -32,6 +39,8 @@ const ERR_AUTH = [190, 0]; // token expired or invalid — nothing will send
 export class WhatsappQueueService {
   private readonly logger = new Logger(WhatsappQueueService.name);
   private readonly active = new Set<string>();
+  // The earliest moment the next message may go, shared by all campaigns.
+  private nextSendAt = 0;
 
   constructor(
     private readonly config: ConfigService,
@@ -42,7 +51,46 @@ export class WhatsappQueueService {
   ) {}
 
   get ratePerSecond(): number {
-    return Math.max(1, Math.min(20, parseInt(this.config.get<string>('WHATSAPP_RATE_PER_SECOND') || '5', 10) || 5));
+    return Math.max(1, Math.min(5, parseInt(this.config.get<string>('WHATSAPP_RATE_PER_SECOND') || '1', 10) || 1));
+  }
+
+  /** Waits for this number's next free sending slot (all campaigns share it). */
+  private async takeSlot(): Promise<void> {
+    const at = Math.max(Date.now(), this.nextSendAt);
+    this.nextSendAt = at + Math.ceil(1000 / this.ratePerSecond);
+    const wait = at - Date.now();
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  }
+
+  /** Meta said the number is sending too fast: everything waits a while. */
+  coolDown(): void {
+    this.nextSendAt = Math.max(this.nextSendAt, Date.now() + RATE_COOL_DOWN_MS);
+  }
+
+  /**
+   * A message Meta accepted and then failed for sending too fast (130429,
+   * reported later by webhook). It was not delivered and is not billed, so
+   * it goes back in line — after a pause for the whole number — up to three
+   * times. Returns false when it has had its retries.
+   */
+  async retryRateLimited(recipient: WhatsappRecipientDocument): Promise<boolean> {
+    if (recipient.retryCount >= MAX_RATE_RETRIES) return false;
+    this.coolDown();
+    recipient.retryCount += 1;
+    recipient.status = 'QUEUED';
+    recipient.lockedAt = undefined;
+    recipient.sentAt = undefined;
+    recipient.failedAt = undefined;
+    recipient.errorCode = ERR_THROUGHPUT;
+    recipient.failureReason = 'Sent too fast — queued again';
+    await recipient.save();
+    // A campaign that had finished sending picks the message up again.
+    await this.campaignModel.updateOne(
+      { _id: recipient.campaignId, status: 'COMPLETED' },
+      { $set: { status: 'SENDING' }, $unset: { completedAt: 1 } },
+    );
+    this.start(recipient.campaignId.toString());
+    return true;
   }
 
   get dailyLimit(): number {
@@ -97,7 +145,6 @@ export class WhatsappQueueService {
 
   private async loop(campaignId: string): Promise<void> {
     const id = new Types.ObjectId(campaignId);
-    const gapMs = Math.ceil(1000 / this.ratePerSecond);
 
     while (this.active.has(campaignId)) {
       const campaign = await this.campaignModel.findById(id).exec();
@@ -161,7 +208,7 @@ export class WhatsappQueueService {
 
       for (const recipient of batch) {
         if (!this.active.has(campaignId)) return;
-        const started = Date.now();
+        await this.takeSlot();
         const halt = await this.sendOne(campaign, recipient);
         if (halt) {
           await this.campaignModel.updateOne({ _id: id }, { $set: { status: 'PAUSED', statusNote: halt } });
@@ -172,8 +219,6 @@ export class WhatsappQueueService {
           await this.syncCounters(id);
           return;
         }
-        const wait = gapMs - (Date.now() - started);
-        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
       }
       await this.syncCounters(id);
     }
@@ -247,7 +292,8 @@ export class WhatsappQueueService {
         await recipient.save();
         return 'WhatsApp token expired or invalid. Update WHATSAPP_ACCESS_TOKEN, then resume.';
       }
-      if (code !== undefined && ERR_RATE.includes(code) && recipient.retryCount < 3) {
+      if (code !== undefined && ERR_RATE.includes(code) && recipient.retryCount < MAX_RATE_RETRIES) {
+        if (code === ERR_THROUGHPUT) this.coolDown();
         recipient.retryCount += 1;
         recipient.status = 'QUEUED';
         recipient.lockedAt = undefined;
