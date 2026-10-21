@@ -254,6 +254,17 @@ export class Business {
   @Prop({ type: Object })
   onboardingNudge?: { stage?: 'customer' | 'service'; count?: number; lastAt?: Date; done?: boolean };
 
+  // Last time the owner or a team member used the app (any signed-in
+  // request; common/guards/jwt-auth.guard.ts, at most every 30 minutes).
+  @Prop()
+  lastSeenAt?: Date;
+
+  // The "come back" pushes to an owner who set up and then went quiet
+  // (reminders/comeback-push.service.ts): how many sent since they were
+  // last active, and when the last went.
+  @Prop({ type: Object })
+  comebackNudge?: { count?: number; lastAt?: Date };
+
   // Optional link to the business's Google Review page or Google Maps listing
   // (e.g. https://g.page/r/.../review). When configured, this is automatically
   // appended to completed service card records shared on WhatsApp.

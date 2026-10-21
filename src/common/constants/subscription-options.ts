@@ -153,6 +153,6 @@ export function getAppStorePricing(
     return { amount: 18, currency: 'USD' };
   }
   if (tier === 'combo')
-    return { amount: teamEnabled ? 1799 : 1199, currency: 'INR' };
+    return { amount: teamEnabled ? 1799 : 1299, currency: 'INR' };
   return { amount: 899, currency: 'INR' };
 }

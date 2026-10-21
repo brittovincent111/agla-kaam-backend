@@ -16,7 +16,9 @@ import {
 } from '../businesses/schemas/business.schema';
 import { Customer, CustomerSchema } from '../customers/schemas/customer.schema';
 import { Service, ServiceSchema } from '../services/schemas/service.schema';
+import { Invoice, InvoiceSchema } from '../invoicing/schemas/invoice.schema';
 import { OnboardingPushService } from './onboarding-push.service';
+import { ComebackPushService } from './comeback-push.service';
 import { EmailService } from '../common/email/email.service';
 
 @Module({
@@ -25,6 +27,7 @@ import { EmailService } from '../common/email/email.service';
       { name: Business.name, schema: BusinessSchema },
       { name: Customer.name, schema: CustomerSchema },
       { name: Service.name, schema: ServiceSchema },
+      { name: Invoice.name, schema: InvoiceSchema },
     ]),
     ServicesModule,
     CustomersModule,
@@ -35,6 +38,6 @@ import { EmailService } from '../common/email/email.service';
     ShortLinksModule,
   ],
   controllers: [RemindersController],
-  providers: [RemindersService, ExpoPushService, OnboardingPushService, EmailService],
+  providers: [RemindersService, ExpoPushService, OnboardingPushService, ComebackPushService, EmailService],
 })
 export class RemindersModule {}

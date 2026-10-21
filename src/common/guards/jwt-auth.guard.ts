@@ -38,6 +38,9 @@ const activeCache = new Map<
   { until: number; role: BusinessRole; seat?: boolean }
 >();
 
+const SEEN_EVERY_MS = 30 * 60_000;
+const lastSeenWritten = new Map<string, number>();
+
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
   constructor(
@@ -89,6 +92,24 @@ export class JwtAuthGuard implements CanActivate {
     activeCache.set(cacheKey, { until: Date.now() + ACTIVE_TTL_MS, role: 'owner' });
   }
 
+  /**
+   * Records that the business used the app (Business.lastSeenAt), so the
+   * "come back" pushes leave active owners alone. At most every 30 minutes
+   * per business, never awaited: a failed write must not fail the request.
+   */
+  private touchLastSeen(businessId: string): void {
+    if (!this.connection) return;
+    const now = Date.now();
+    if ((lastSeenWritten.get(businessId) ?? 0) > now - SEEN_EVERY_MS) return;
+    lastSeenWritten.set(businessId, now);
+    if (lastSeenWritten.size > 5000) lastSeenWritten.clear();
+    this.connection
+      .model('Business')
+      .updateOne({ _id: businessId }, { $set: { lastSeenAt: new Date(now) } })
+      .exec()
+      .catch(() => undefined);
+  }
+
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
     const authHeader: string | undefined = request.headers.authorization;
@@ -114,6 +135,7 @@ export class JwtAuthGuard implements CanActivate {
       if (!isTeamMember(payload)) {
         await this.assertSession('Business', payload.sub, request.business.sid);
       }
+      this.touchLastSeen(payload.sub);
 
       // A manager is a team member too: removed, out of seats or demoted, they
       // lose access exactly as a technician does.
