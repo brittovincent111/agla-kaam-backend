@@ -49,5 +49,10 @@ export function looksMalayali(name?: string | null, address?: string | null): bo
   return text.split(/[^a-z]+/).some((w) => WORDS.has(w));
 }
 
+// The Malayalam block as the letters themselves: MongoDB's regex engine
+// (PCRE) refuses \u escapes, and refused the whole autopilot plan with them
+// (2026-10-23).
+const MALAYALAM = `${String.fromCharCode(0x0d00)}-${String.fromCharCode(0x0d7f)}`;
+
 /** The same test as a Mongo filter on the business name. */
-export const MALAYALI_NAME = new RegExp(`(?:[\\u0D00-\\u0D7F]|\\b(?:${[...WORDS].join('|')})\\b)`, 'i');
+export const MALAYALI_NAME = new RegExp(`(?:[${MALAYALAM}]|\\b(?:${[...WORDS].join('|')})\\b)`, 'i');

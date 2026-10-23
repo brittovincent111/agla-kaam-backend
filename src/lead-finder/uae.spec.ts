@@ -55,6 +55,10 @@ describe('Malayali-run shop names', () => {
     expect(MALAYALI_NAME.test(name)).toBe(true);
   });
 
+  it('has no \\u escape MongoDB would refuse', () => {
+    expect(MALAYALI_NAME.source).not.toMatch(/\\u/);
+  });
+
   it.each(['Al Faisal Technical Services LLC', 'Emirates Cool AC', 'Ashraf Electrical', 'Lahore AC Repair', 'Palace Cooling'])(
     'not %s',
     (name) => {
